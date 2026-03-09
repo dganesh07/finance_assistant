@@ -1,0 +1,58 @@
+## Financial Profile — [YOUR NAME]
+## The AI reads this file every run to personalize categorization and advice.
+## Fill in each section honestly. The more detail, the smarter the output.
+
+---
+
+### INCOME
+- Employment type: [e.g. full-time salaried / hourly / freelance]
+- Approximate monthly take-home pay: $[XXXX]
+- Other income sources: [e.g. side gig, rental income, investments — or "none"]
+- Pay schedule: [e.g. bi-weekly on Fridays]
+
+---
+
+### FIXED MONTHLY OBLIGATIONS
+# (Your bills.json covers most of this — add anything not in there)
+- Total fixed bills: see bills.json
+- Other obligations not in bills.json: [e.g. child support, loan payments]
+
+---
+
+### SAVINGS & GOALS
+- Emergency fund status: [e.g. 2 months saved, targeting 6 months]
+- Active savings goals: [e.g. vacation fund $3,000 by August, down payment]
+- RRSP/TFSA contributions: [e.g. auto-contributing $200/month to TFSA]
+
+---
+
+### SPENDING PATTERNS (help the AI categorize correctly)
+- Grocery stores I use: [e.g. No Frills, Loblaws, Walmart]
+- Gas stations I use: [e.g. Petro-Canada, Costco Gas]
+- Regular restaurants/takeout: [e.g. often DoorDash, Subway, local spots]
+- Gyms / health services: [e.g. Planet Fitness $25/month, physio occasionally]
+- Regular transit use: [e.g. TTC Presto card, Uber frequently]
+
+---
+
+### VEHICLES
+- Vehicle 1: [e.g. 2019 Honda Civic — gas, ~$80-100/month fuel]
+- Insurance: [e.g. $145/month, renews October]
+- Service: [e.g. last oil change Jan 2025, next due ~April]
+
+---
+
+### FLAGS & CONTEXT FOR AI
+# Things the AI should know to give better advice:
+- [e.g. "I'm trying to cut dining spending — flag anything over $50 at restaurants"]
+- [e.g. "I split groceries with my partner so my grocery spend looks low"]
+- [e.g. "Amazon transactions could be groceries, household, or personal — ask me"]
+- [e.g. "I expense work travel — don't flag those as discretionary spending"]
+
+---
+
+### FINANCIAL STRESS AREAS
+# Honest assessment helps the AI prioritize its to-do list for you:
+- [e.g. "I overspend on food delivery consistently"]
+- [e.g. "I forget about annual subscriptions and get surprised"]
+- [e.g. "I want to track whether I'm actually hitting my savings goal each month"]
