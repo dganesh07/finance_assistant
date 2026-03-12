@@ -3,13 +3,13 @@ run.py — Main entry point for the Finance Agent.
 
 Run:  python run.py
 
-Current flow (Phase 1 — scaffold):
+Current flow (Phase 2):
   1. Initialize the SQLite DB if it doesn't exist
   2. Print confirmation + loaded bills
-  3. Print the DB tables that exist
+  3. Scan data/statements/ for new PDFs/CSVs and parse them
+  4. Print parse results + total new transactions
 
-Future flow (Phase 2+):
-  4. Scan data/statements/ for new PDFs/CSVs and parse them
+Future flow (Phase 3+):
   5. Categorize new transactions with AI (Ollama)
   6. Generate and print a spending report
 """
@@ -24,8 +24,9 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from config import DB_PATH, BILLS_FILE
+from config import DB_PATH, BILLS_FILE, STATEMENTS_DIR
 from db.init_db import initialize_db
+from src.parser import parse_new_statements, _print_results_table
 
 console = Console()
 
@@ -113,7 +114,7 @@ def main() -> None:
     console.print()
     console.print(Panel(
         Text("FINANCE AGENT", justify="center", style="bold green"),
-        subtitle="[dim]Phase 1 — Scaffold[/dim]",
+        subtitle="[dim]Phase 2 — Parser[/dim]",
         border_style="green",
     ))
     console.print()
@@ -131,7 +132,19 @@ def main() -> None:
     # Step 3: Confirm DB tables exist
     print_db_tables()
 
-    console.print("[dim]Drop PDFs or CSVs into data/statements/ — Phase 2 will parse them.[/dim]")
+    # Step 4: Parse any new statement files
+    console.rule("[bold cyan]Parsing Statements[/bold cyan]")
+    console.print(f"[dim]Scanning: {STATEMENTS_DIR}[/dim]\n")
+
+    results = parse_new_statements()
+
+    if results:
+        _print_results_table(results)
+        total_new = sum(r["inserted"] for r in results)
+        console.print(f"\n[bold green]{total_new} new transaction(s) added to DB.[/bold green]")
+    else:
+        console.print("[dim]No statement files found. Drop a PDF or CSV into data/statements/[/dim]")
+
     console.print()
 
 

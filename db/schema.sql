@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     description TEXT    NOT NULL,
     amount      REAL    NOT NULL,
     type        TEXT    NOT NULL,         -- 'debit' or 'credit'
+    account     TEXT    DEFAULT 'unknown', -- e.g. 'td_chequing', 'td_visa', 'td_savings'
     category    TEXT    DEFAULT 'unknown',
     subcategory TEXT,
     confirmed   INTEGER DEFAULT 0,        -- 1 = manually confirmed category

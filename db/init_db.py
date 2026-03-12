@@ -25,10 +25,26 @@ def initialize_db() -> None:
     Connects to DB_PATH (creating the file if missing), reads the full
     schema.sql, and executes it as a script.  All statements use
     IF NOT EXISTS so this is idempotent.
+
+    Also runs any additive migrations (new columns) so existing DBs
+    stay in sync without losing data.
     """
     schema = SCHEMA_FILE.read_text()
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(schema)
+
+    # ── Additive migrations ────────────────────────────────────────────────
+    # Each ALTER TABLE is wrapped in a try/except: SQLite raises OperationalError
+    # if the column already exists, which we safely ignore.
+    migrations = [
+        "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass  # column already exists
+
     conn.commit()
     conn.close()
 

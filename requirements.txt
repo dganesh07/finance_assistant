@@ -2,3 +2,4 @@ pdfplumber
 pandas
 rich
 ollama
+python-dateutil
