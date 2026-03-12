@@ -29,118 +29,92 @@ finance-agent/
 
 ---
 
-## Phase 1 Setup — First-Time Installation
+## Installation
 
-### Prerequisites
-
-- Python 3.11 or higher
-- [uv](https://docs.astral.sh/uv/) — fast Python package manager
-
-Install `uv` if you don't have it:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
----
-
-### Step 1 — Navigate into the project folder
+**Requirements:** Python 3.11+
 
 ```bash
-cd finance-agent
-```
-
----
-
-### Step 2 — Create a virtual environment with uv
-
-```bash
-uv venv
-```
-
-This creates a `.venv/` folder inside the project. Your Python packages stay
-isolated here and won't conflict with anything else on your machine.
-
----
-
-### Step 3 — Activate the virtual environment
-
-**macOS / Linux:**
-```bash
-source .venv/bin/activate
-```
-
-**Windows:**
-```bash
-.venv\Scripts\activate
-```
-
-Your terminal prompt will show `(.venv)` when active.
-
----
-
-### Step 4 — Install dependencies
-
-```bash
+uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
+python run.py   # initialises DB and runs the agent
 ```
 
 ---
 
-### Step 5 — Initialize the database
+## Phase 2 — PDF + CSV Parser
+
+### What was built
+
+**`src/parser.py`** — full statement parsing pipeline:
+
+| Feature | Detail |
+|---|---|
+| CSV parsing | Auto-sniffs delimiter; handles TD headerless format (no column row) and generic headers |
+| PDF parsing | Uses `pdfplumber` table extraction with a TD-specific parser; falls back to raw text for non-TD PDFs |
+| Date normalisation | `python-dateutil` handles any format; no-year dates (e.g. `FEB02`) infer year automatically |
+| Deduplication | Two-layer: file-level skip (already imported?) + row-level MD5 hash check |
+| Personal info scrubbing | Strips names from e-transfer descriptions before DB storage |
+| Account number sanitisation | Strips account numbers from filenames before storing in `source_file` |
+| Account detection | Infers account label (`td_chequing`, `td_visa`, etc.) from filename |
+| Pre-categorization rules | Obvious transactions (transfers, bills, income) get a locked category at import time — AI won't overwrite |
+
+**Schema additions:**
+- `transactions.account` — tracks which bank account each transaction came from (prevents credit card double-counting in reports)
+
+### Running the parser
 
 ```bash
-python db/init_db.py
-```
-
-Expected output:
-```
-DB ready: /path/to/finance-agent/finance.db
-All tables created successfully.
-```
-
-This creates `finance.db` in the project root with all five tables.
-The file is just a single file on disk — no server, no daemon needed.
-
----
-
-### Step 6 — Run the agent
-
-```bash
+# Normal run — parses any new files in data/statements/
 python run.py
+
+# Self-test with 5 fake transactions (no real statement needed)
+python src/parser.py --test
+
+# Debug: inspect raw pdfplumber output for a PDF
+python src/parser.py --inspect data/statements/your-file.pdf
 ```
 
-Expected output:
-- A bills table showing your 5 configured bills and monthly total
-- A DB tables table confirming all 5 SQLite tables exist
+### Dropping in a statement
+
+1. Download your statement from online banking (PDF or CSV)
+2. Drop it into `data/statements/`
+3. Run `python run.py`
+
+The parser auto-detects the file, imports it, and skips it on future runs.
+
+### Reset the database
+
+```bash
+rm finance.db
+python run.py   # reinitialises from scratch
+```
+
+Your statement files in `data/statements/` are untouched — they'll re-import cleanly.
+
+### Pre-categorization rules
+
+Transactions matching known patterns are categorised and locked (`confirmed=1`) at import, before the AI runs in Phase 3. Add your own merchants to `_PRECATEGORY_RULES` in `src/parser.py`:
+
+```python
+(re.compile(r"LOBLAWS|SUPERSTORE|METRO", re.IGNORECASE), "groceries"),
+(re.compile(r"TIM HORTONS|STARBUCKS",    re.IGNORECASE), "food_dining"),
+```
+
+### Credit card double-counting
+
+Each transaction stores its `account` (e.g. `td_chequing`, `td_visa`). The Visa payment row in chequing (`TDVISAPREAUTHPYMT`) is auto-categorized as `transfer` and excluded from spending totals in Phase 4 reports. Individual Visa transactions are the real spending data.
+
+### Phase 2 Checklist
+
+- [ ] `python src/parser.py --test` → 5 inserted, run again → 0 inserted
+- [ ] Drop a real bank statement → `python run.py` → transactions appear in DB
+- [ ] Open `finance.db` → transactions table populated with correct account/category
 
 ---
 
-## Phase 1 Checklist (Tests to Pass)
+## Inspecting the Database
 
-- [ ] `python db/init_db.py` → runs without errors, `finance.db` appears
-- [ ] `python run.py` → prints bills table + DB tables, no errors
-- [ ] Open `finance.db` in **DB Browser for SQLite** → see 5 empty tables
-
----
-
-## SQLite — Do You Need to Install Anything?
-
-**No.** SQLite is built into Python's standard library (`import sqlite3`).
-You do not need to install any database software.
-
-`finance.db` is just a regular file. You can:
-- Copy it anywhere to back it up
-- Open it with a GUI to inspect data (see below)
-- Delete it and re-run `db/init_db.py` to start fresh
-
-### Recommended GUI: DB Browser for SQLite
-
-Free, open-source, works on macOS/Windows/Linux.
-
-Download: https://sqlitebrowser.org/dl/
-
-After installing, open it and use **File → Open Database** to open `finance.db`.
-You'll see all 5 tables under the "Database Structure" tab.
+No server needed — `finance.db` is a single file. Open it with [DB Browser for SQLite](https://sqlitebrowser.org/dl/) (free) via **File → Open Database**.
 
 ---
 
@@ -161,19 +135,13 @@ Edit `bills.json` directly. Each entry supports:
 
 ---
 
-## Filling In Your Profile
+## Your Profile
 
-`profile.txt` is **git-ignored** (personal data stays local). A blank template
-is committed as `profile.example.txt`.
+`profile.txt` is git-ignored. Copy the template and fill it in — the AI reads it on every run to personalise advice:
 
-First-time setup:
 ```bash
 cp profile.example.txt profile.txt
 ```
-
-Then open `profile.txt` and fill in each section. The AI reads this file on
-every run to personalize categorization and advice. The more honest detail you
-add, the better the output.
 
 ---
 
@@ -182,16 +150,10 @@ add, the better the output.
 | Stage | Goal                          | Status     |
 |-------|-------------------------------|------------|
 | 1     | Scaffold + SQLite schema      | ✅ Done    |
-| 2     | PDF + CSV parser              | Upcoming   |
+| 2     | PDF + CSV parser              | ✅ Done    |
 | 3     | AI categorization (Ollama)    | Upcoming   |
 | 4     | Context builder               | Upcoming   |
 | 5     | Terminal report               | Upcoming   |
 
 ---
 
-## Deactivating the Virtual Environment
-
-When you're done working:
-```bash
-deactivate
-```
