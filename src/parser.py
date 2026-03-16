@@ -78,9 +78,14 @@ def normalise_date(raw: str) -> Optional[str]:
 
 # ── Hash ─────────────────────────────────────────────────────────────────────
 
-def compute_hash(date: str, description: str, amount: float) -> str:
-    """MD5 fingerprint of date + description + amount for deduplication."""
-    raw = f"{date}|{description}|{amount:.2f}"
+def compute_hash(date: str, description: str, amount: float, occurrence: int = 0) -> str:
+    """MD5 fingerprint of date + description + amount + occurrence for deduplication.
+
+    occurrence allows two legitimately identical transactions in the same file
+    (e.g. two parking charges for the same amount on the same day) to coexist
+    in the DB without being treated as duplicates of each other.
+    """
+    raw = f"{date}|{description}|{amount:.2f}|{occurrence}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -296,8 +301,14 @@ _TD_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Rows to skip in TD transaction table
-_TD_SKIP_DESCRIPTIONS = {"startingbalance", "starting balance", ""}
+# Rows to skip in TD transaction table (after lowercasing + space-removal)
+_TD_SKIP_DESCRIPTIONS = {
+    "startingbalance",
+    "starting balance",
+    "closingbalance",
+    "closing balance",
+    "",
+}
 
 
 def _normalise_td_date(raw: str) -> Optional[str]:
@@ -354,6 +365,10 @@ def _parse_td_table(table: list[list]) -> list[dict]:
 
     wd_idx  = next((i for i, c in enumerate(header) if "withdrawal" in c), None)
     dep_idx = next((i for i, c in enumerate(header) if "deposit"    in c), None)
+    bal_idx = next((i for i, c in enumerate(header) if "balance"    in c), None)
+
+    def _pad(lst, length):
+        return lst + [""] * (length - len(lst))
 
     for row in rows[1:]:
         # Pad short rows
@@ -372,23 +387,33 @@ def _parse_td_table(table: list[list]) -> list[dict]:
         dates = [d.strip() for d in raw_date.split("\n")]
         wds   = [d.strip() for d in (row[wd_idx].split("\n")  if wd_idx  is not None else [""])]
         deps  = [d.strip() for d in (row[dep_idx].split("\n") if dep_idx is not None else [""])]
+        # Balance column — used only to detect when its value bleeds into wds/deps
+        bals  = [d.strip() for d in (row[bal_idx].split("\n") if bal_idx is not None else [""])]
 
         # Align all lists to max length (pad with "")
         n = max(len(descs), len(dates), len(wds), len(deps))
-        def _pad(lst, length):
-            return lst + [""] * (length - len(lst))
 
         descs = _pad(descs, n)
         dates = _pad(dates, n)
         wds   = _pad(wds,   n)
         deps  = _pad(deps,  n)
+        bals  = _pad(bals,  n)
 
-        for desc, raw_d, wd, dep in zip(descs, dates, wds, deps):
-            # Skip non-transaction rows
+        # dep_carry: when pdfplumber merges a fee row (e.g. MONTHLYACCOUNTFEE)
+        # with its rebate row (ACCTFEEREBATE), the fee summary box at the bottom
+        # of the page bleeds into the last merged row.  The pattern we see is:
+        #   sub-entry 0 (fee):    wd="17.95"  dep="17.95"   ← dep mirrors wd
+        #   sub-entry 1 (rebate): wd="11,298.26" dep="53,596.69" ← both garbage
+        # The real credit amount (17.95) appears in dep[0] not dep[1].
+        # dep_carry saves it from entry 0 and applies it to the contaminated entry 1.
+        dep_carry: Optional[str] = None
+
+        for desc, raw_d, wd, dep, bal in zip(descs, dates, wds, deps, bals):
+            # Skip non-transaction rows (opening/closing balance labels, blanks)
             if desc.lower().replace(" ", "") in _TD_SKIP_DESCRIPTIONS:
                 continue
             if not raw_d:
-                continue  # totals / summary row
+                continue  # totals / summary row with no date
 
             date = _normalise_td_date(raw_d)
             if not date:
@@ -400,6 +425,36 @@ def _parse_td_table(table: list[list]) -> list[dict]:
 
             wd_clean  = re.sub(r"[$, ]", "", wd)
             dep_clean = re.sub(r"[$, ]", "", dep)
+            bal_clean = re.sub(r"[$, ]", "", bal)
+
+            # Guard 1: balance-column bleed — wd equals the running balance value
+            if wd_clean and wd_clean == bal_clean:
+                wd_clean = ""
+
+            # Guard 2: fee-summary contamination in merged rows
+            # A real transaction should appear in ONLY one of wd or dep.
+            # When both are non-empty it signals bleed-in from adjacent table content.
+            if wd_clean and dep_clean:
+                if wd_clean == dep_clean:
+                    # Equal values: this is the fee row (e.g. MONTHLYACCOUNTFEE).
+                    # dep value is really the rebate that belongs to the NEXT entry.
+                    dep_carry = dep_clean   # save for next sub-entry
+                    dep_clean = ""          # suppress duplicate credit here
+                elif dep_carry is not None:
+                    # Both columns have different values (fee-summary garbage).
+                    # Use the carried deposit from the previous sub-entry as credit.
+                    wd_clean  = ""
+                    dep_clean = dep_carry
+                    dep_carry = None
+                else:
+                    # Both columns differ, no carry — unrecognised contamination; skip.
+                    log.debug(
+                        "Skipping contaminated entry: desc=%r wd=%s dep=%s",
+                        desc, wd_clean, dep_clean,
+                    )
+                    continue
+            else:
+                dep_carry = None   # normal single-column row; clear any pending carry
 
             try:
                 if wd_clean and float(wd_clean) > 0:
@@ -465,6 +520,143 @@ def _extract_from_text(text: str) -> list[dict]:
     return results
 
 
+# ── Credit card (CC) text parser ─────────────────────────────────────────────
+# TD Visa-style CC statements have NO pdfplumber tables.
+# Transactions appear as raw text lines:
+#   MMMDD MMMDD MERCHANT-NAME $X.XX
+#   MMMDD MMMDD PREAUTHORIZEDPAYMENT -$X.XX   ← negative = payment/credit
+#
+# First date  = transaction date (what we store)
+# Second date = posting date (ignored)
+# Negative amount = credit (payment or refund); positive = debit (purchase/charge)
+#
+# Raw text quirks from pdfplumber:
+#  • Page-1 lines may have extra side-panel text after the amount — stopped at
+#    the first matched $X.XX so the trailing text is ignored.
+#  • Multi-line merchant names (description wraps to next line) — we capture the
+#    first line only; the orphaned continuation line is silently dropped.
+
+_TD_VISA_TXN_RE = re.compile(
+    r"^((?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*\d{1,2})"   # trans date MMM[space]DD
+    r"\s+"
+    r"(?:(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*\d{1,2})"   # posting date (ignored)
+    r"\s+"
+    r"(.+?)"                                                                    # description (non-greedy)
+    r"\s+"
+    r"(-?\$[\d,]+\.\d{2})",                                                    # amount (- prefix = credit)
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Lines to always skip — account summaries, headers, totals, boilerplate
+_TD_VISA_SKIP_RE = re.compile(
+    r"STATEMENT\s+(DATE|PERIOD|BALANCE|SUMMARY)|"
+    r"ACCOUNT\s+(NUMBER|SUMMARY)|"
+    r"CREDIT\s+LIMIT|"
+    r"MINIMUM\s+PAYMENT|"
+    r"PAYMENT\s+DUE\s+DATE|"
+    r"OPENING\s+BALANCE|"
+    r"CLOSING\s+BALANCE|"
+    r"TOTAL\s*(NEW\s*)?BALANCE|"
+    r"TOTAL\s+(CREDITS?|DEBITS?|CHARGES?)|"
+    r"INTEREST\s+(CHARGED|RATE|FREE)|"
+    r"ANNUAL\s+FEE|"
+    r"^\s*\d{1,4}\s*$",   # bare page numbers / single numbers
+    re.IGNORECASE,
+)
+
+
+def _is_td_visa_text(text: str) -> bool:
+    """
+    Return True if the text block contains the double-MMMDD date pattern
+    characteristic of TD Visa CC statement transactions.
+
+    Uses MULTILINE so ^ matches start of each line in the block.
+    """
+    return bool(_TD_VISA_TXN_RE.search(text))
+
+
+def _parse_td_visa_text(text: str) -> list[dict]:
+    """
+    Parse TD Visa CC statement raw text (no tables).
+
+    Each transaction line:
+        MMMDD MMMDD DESCRIPTION $AMOUNT
+        MMMDD MMMDD PAYMENT      -$AMOUNT   ← negative amount = credit
+
+    Negative amounts → type='credit' (payment/refund reducing balance).
+    Positive amounts → type='debit'  (purchase/charge).
+    """
+    results = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        # Transaction regex takes priority — if a line starts with two dates
+        # it's a transaction even if it also contains side-panel summary text
+        # (e.g. "JAN27 JAN28 APPLE.COM $1.44 Payment Due Date Mar.20").
+        # The skip regex is only applied to lines that don't look like transactions.
+        m = _TD_VISA_TXN_RE.match(line)
+        if not m:
+            continue
+
+        raw_date_str = m.group(1)
+        description  = m.group(2).strip()
+        raw_amount   = m.group(3)   # may have leading '-'
+
+        # Parse date: "JAN27" → "YYYY-MM-DD"
+        date = _normalise_td_date(raw_date_str)
+        if not date:
+            continue
+
+        # Parse amount — negative means credit (payment/refund)
+        try:
+            val = float(re.sub(r"[$,]", "", raw_amount))
+        except ValueError:
+            continue
+
+        if val == 0 or not description:
+            continue
+
+        amount   = round(abs(val), 2)
+        txn_type = "credit" if val < 0 else "debit"
+
+        results.append({
+            "date": date,
+            "description": scrub_description(description),
+            "amount": amount,
+            "type": txn_type,
+        })
+
+    return results
+
+
+def _extract_text_spaced(page) -> str:
+    """
+    Extract page text with preserved word spacing — for CC statements only.
+
+    pdfplumber's default extract_text(x_tolerance=3) collapses gaps smaller
+    than 3px, causing "WAVES COFFEE CITY POINT SURREY" to become
+    "WAVESCOFFEECITYPOINTSURREY" in CC statements where merchant names are
+    stored as individually-positioned characters.
+
+    x_tolerance=1: a gap of just 1px between characters triggers a space,
+    restoring the visible word boundaries from the PDF.
+
+    y_tolerance=5: characters within 5px vertically are treated as the same
+    line — needed because page-1 of CC statements has dates and their
+    corresponding description text at slightly different y-positions (~0.8px
+    apart) due to the two-column layout. Line-to-line spacing is ~19px so
+    this never accidentally merges two separate transaction rows.
+
+    WARNING: only call this when you've confirmed the page is CC-style.
+    x_tolerance=1 can produce garbled output on PDFs from other banks where
+    characters are stored with tight kerning and appear spaced only visually.
+    The generic fallback uses the default extract_text() to stay safe.
+    """
+    return page.extract_text(x_tolerance=1, y_tolerance=5) or ""
+
+
 def parse_pdf(file_path: Path) -> list[dict]:
     """
     Extract transactions from a PDF bank statement using pdfplumber.
@@ -472,7 +664,9 @@ def parse_pdf(file_path: Path) -> list[dict]:
     Strategy (per page):
       1. For each table: if it looks like a TD transaction table → _parse_td_table()
       2. Otherwise skip non-transaction tables (account info, fee summaries)
-      3. If no tables at all → _extract_from_text() fallback
+      3. If no tables → reconstruct text via word bounding boxes (preserves spaces)
+         a. Looks like CC statement → _parse_td_visa_text()
+         b. Otherwise → generic _extract_from_text() fallback
 
     Returns list of dicts: {date, description, amount, type}
     """
@@ -495,9 +689,18 @@ def parse_pdf(file_path: Path) -> list[dict]:
                         # — they contain no transaction data we need
 
                 if not found_any_table:
-                    # Non-TD PDF fallback: try raw text
-                    text = page.extract_text() or ""
-                    transactions.extend(_extract_from_text(text))
+                    # First pass: standard extraction to detect statement type safely
+                    default_text = page.extract_text() or ""
+                    if _is_td_visa_text(default_text):
+                        # CC statement confirmed — re-extract with tighter x_tolerance
+                        # to restore spaces in merchant names.
+                        # x_tolerance=1 is only safe once we know it's CC format;
+                        # it can garble other banks' PDFs with tight character kerning.
+                        spaced_text = _extract_text_spaced(page)
+                        transactions.extend(_parse_td_visa_text(spaced_text))
+                    else:
+                        # Generic fallback for other bank PDFs — keep default params
+                        transactions.extend(_extract_from_text(default_text))
 
     except Exception as e:
         console.print(f"[red]  PDF parse error for {file_path.name}: {e}[/red]")
@@ -510,11 +713,11 @@ def parse_pdf(file_path: Path) -> list[dict]:
 # Maps keywords found in filenames to a canonical account label.
 # Add more entries here as you add new banks/accounts.
 _ACCOUNT_KEYWORDS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"visa",              re.IGNORECASE), "td_visa"),
-    (re.compile(r"mastercard|mc",     re.IGNORECASE), "td_mastercard"),
-    (re.compile(r"chequ|checking",    re.IGNORECASE), "td_chequing"),
-    (re.compile(r"saving",            re.IGNORECASE), "td_savings"),
-    (re.compile(r"line.of.credit|loc",re.IGNORECASE), "td_loc"),
+    (re.compile(r"visa",              re.IGNORECASE), "creditcard"),
+    (re.compile(r"mastercard|mc",     re.IGNORECASE), "creditcard"),
+    (re.compile(r"chequ|checking",    re.IGNORECASE), "chequing"),
+    (re.compile(r"saving",            re.IGNORECASE), "savings"),
+    (re.compile(r"line.of.credit|loc",re.IGNORECASE), "loc"),
 ]
 
 
@@ -523,8 +726,8 @@ def detect_account(filename: str) -> str:
     Infer the account label from a statement filename.
 
     Examples:
-      'TD_UNLIMITED_CHEQUING_ACCOUNT_...'  → 'td_chequing'
-      'TD_VISA_...'                         → 'td_visa'
+      'MY_CHEQUING_ACCOUNT_...'  → 'chequing'
+      'MY_VISA_CARD_...'         → 'creditcard'
 
     Returns 'unknown' if no pattern matches — you can update it manually
     in the DB or add a rule above.
@@ -545,9 +748,10 @@ def sanitize_source_filename(filename: str) -> str:
     """
     Strip account/card number patterns from a filename before storing in the DB.
 
+    Removes segments matching NNNN-NNNNNNN or 8+ consecutive digits.
     Example:
-      'TD_UNLIMITED_CHEQUING_ACCOUNT_9096-6153916_Jan_30-Feb_27_2026.pdf'
-      → 'TD_UNLIMITED_CHEQUING_ACCOUNT_Jan_30-Feb_27_2026.pdf'
+      'CHEQUING_ACCOUNT_XXXX-XXXXXXX_Jan_30-Feb_27_2026.pdf'
+      → 'CHEQUING_ACCOUNT_Jan_30-Feb_27_2026.pdf'
     """
     stem = Path(filename).stem
     suffix = Path(filename).suffix
@@ -565,9 +769,12 @@ def sanitize_source_filename(filename: str) -> str:
 # Add rows here as you discover recurring patterns in your statements.
 
 _PRECATEGORY_RULES: list[tuple[re.Pattern, str]] = [
-    # ── Transfers out of chequing ─────────────────────────────────────────────
+    # ── Transfers / payments ──────────────────────────────────────────────────
     # TD Visa pre-authorized payment (Visa bill paid from chequing)
     (re.compile(r"TDVISAPREAUTHPYMT|TD\s*VISA\s*PREAUTH", re.IGNORECASE), "transfer"),
+    # TD Visa CC statement: pre-authorized payment received on the card
+    # (mirrors TDVISAPREAUTHPYMT in chequing — same transaction, opposite side)
+    (re.compile(r"PREAUTHORIZED\s*PAYMENT|PAYMENT\s*[-–]?\s*THANK\s+YOU", re.IGNORECASE), "transfer"),
     # TD Line of Credit payment
     (re.compile(r"TD\s*LOC\s*PYMT|TDLOC", re.IGNORECASE), "transfer"),
     # Generic internal TD account transfers
@@ -618,10 +825,18 @@ def insert_transactions(
     Returns counts: inserted, skipped, failed.
     """
     inserted = skipped = failed = 0
+    # Track how many times each (date, description, amount) combo has appeared
+    # in this batch so that two legitimately identical transactions in the same
+    # file (e.g. two same-amount charges from the same merchant on the same day)
+    # get distinct hashes and are both inserted.
+    occurrence_counter: dict[tuple, int] = {}
 
     for row in rows:
         try:
-            h = compute_hash(row["date"], row["description"], row["amount"])
+            key = (row["date"], row["description"], row["amount"])
+            occurrence = occurrence_counter.get(key, 0)
+            occurrence_counter[key] = occurrence + 1
+            h = compute_hash(row["date"], row["description"], row["amount"], occurrence)
 
             exists = conn.execute(
                 "SELECT 1 FROM transactions WHERE hash = ?", (h,)
@@ -650,6 +865,121 @@ def insert_transactions(
 
     conn.commit()
     return {"inserted": inserted, "skipped": skipped, "failed": failed}
+
+
+# ── Statement balance verification ───────────────────────────────────────────
+#
+# After parsing, we extract the summary totals printed on the statement itself
+# and compare against the transactions in the DB.  A mismatch means the parser
+# missed (or double-counted) rows — useful to catch early rather than in Phase 3.
+#
+# For CC statements  : "Purchases & Other Charges $X.XX" and "Payments & Credits $X.XX"
+# For chequing PDFs  : "Starting Balance" and ending balance from the Balance column
+
+# CC statement — "Purchases & Other Charges $1,567.01"
+_CC_CHARGES_RE  = re.compile(r"Purchases?\s*[&and]+\s*Other\s*Charges?\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
+_CC_PAYMENTS_RE = re.compile(r"Payments?\s*[&and]+\s*Credits?\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
+_CC_NEW_BAL_RE  = re.compile(r"NEW\s*BALANCE\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
+
+# Chequing PDF — TD stores totals in the Balance column; we look for a row
+# that contains "CLOSINGBALANCE" or check the last balance cell in the table.
+_CHQ_START_BAL_RE  = re.compile(r"STARTINGBALANCE|STARTING\s+BALANCE", re.IGNORECASE)
+_CHQ_CLOSING_RE    = re.compile(r"CLOSINGBALANCE|CLOSING\s+BALANCE",    re.IGNORECASE)
+_DOLLAR_RE         = re.compile(r"\$?([\d,]+\.\d{2})")
+
+
+def _parse_dollar(s: str) -> Optional[float]:
+    """Parse '$1,234.56' or '1234.56' → float, or None on failure."""
+    s = re.sub(r"[$, ]", "", (s or "").strip())
+    try:
+        return float(s) if s else None
+    except ValueError:
+        return None
+
+
+def verify_statement(file_path: Path, account: str) -> dict:
+    """
+    Open a statement PDF and extract the official summary totals for reconciliation.
+
+    Returns a dict:
+      {
+        "account":          str,
+        "file":             str,
+        # CC fields
+        "expected_charges": float | None,   # Purchases & Other Charges
+        "expected_payments":float | None,   # Payments & Credits
+        "expected_new_bal": float | None,   # New Balance
+        # chequing fields
+        "opening_balance":  float | None,
+        "closing_balance":  float | None,
+      }
+    None means the value couldn't be found in the statement.
+    """
+    result: dict = {
+        "account":           account,
+        "file":              file_path.name,
+        "expected_charges":  None,
+        "expected_payments": None,
+        "expected_new_bal":  None,
+        "opening_balance":   None,
+        "closing_balance":   None,
+    }
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            full_text = "\n".join(
+                (page.extract_text() or "") for page in pdf.pages
+            )
+
+            if account == "creditcard":
+                m = _CC_CHARGES_RE.search(full_text)
+                if m:
+                    result["expected_charges"] = _parse_dollar(m.group(1))
+                m = _CC_PAYMENTS_RE.search(full_text)
+                if m:
+                    result["expected_payments"] = _parse_dollar(m.group(1))
+                m = _CC_NEW_BAL_RE.search(full_text)
+                if m:
+                    result["expected_new_bal"] = _parse_dollar(m.group(1))
+
+            elif account == "chequing":
+                # Find opening / closing balance from the transaction table
+                for page in pdf.pages:
+                    for table in (page.extract_tables() or []):
+                        if not table or not _is_td_transaction_table(
+                            [str(c or "").strip() for c in table[0]]
+                        ):
+                            continue
+                        header = [str(c or "").lower().strip() for c in table[0]]
+                        try:
+                            bal_idx = next(i for i, h in enumerate(header) if "balance" in h)
+                        except StopIteration:
+                            continue
+
+                        for row in table[1:]:
+                            if not row:
+                                continue
+                            cells = [str(c or "").strip() for c in row]
+                            desc = cells[0] if cells else ""
+                            bal_cell = cells[bal_idx] if bal_idx < len(cells) else ""
+
+                            # Split multi-transaction rows on \n
+                            descs = [d.strip() for d in desc.split("\n")]
+                            bals  = [b.strip() for b in bal_cell.split("\n")]
+
+                            for d, b in zip(descs, bals):
+                                if _CHQ_START_BAL_RE.search(d):
+                                    result["opening_balance"] = _parse_dollar(
+                                        re.sub(r"[$,]", "", b)
+                                    )
+                                elif _CHQ_CLOSING_RE.search(d):
+                                    result["closing_balance"] = _parse_dollar(
+                                        re.sub(r"[$,]", "", b)
+                                    )
+    except Exception as e:
+        log.debug("verify_statement failed for %s: %s", file_path.name, e)
+
+    return result
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
