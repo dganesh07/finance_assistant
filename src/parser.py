@@ -119,6 +119,10 @@ _SCRUB_PATTERNS = [
     (re.compile(r"(CHEQUE\s+#?\d+\s+(?:TO|FROM|PAYABLE\s+TO))\s+[\w\s\-'\.]{2,40}",
                 re.IGNORECASE),
      r"\1 [PAYEE]"),
+    # TD chequing transaction-type suffixes with embedded amount: "MERCHANT 9.99_V" → "MERCHANT"
+    (re.compile(r"\s+[\d]+\.[\d]{2}_[VF]\s*$", re.IGNORECASE), ""),
+    # TD chequing transaction-type suffixes without amount: "Amazon.ca _V" → "Amazon.ca"
+    (re.compile(r"\s+_[VF]\s*$", re.IGNORECASE), ""),
 ]
 
 
@@ -335,7 +339,7 @@ def _is_td_transaction_table(header_row: list[str]) -> bool:
     )
 
 
-def _parse_td_table(table: list[list]) -> list[dict]:
+def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
     """
     Parse a TD chequing/savings transaction table extracted by pdfplumber.
 
@@ -346,10 +350,17 @@ def _parse_td_table(table: list[list]) -> list[dict]:
       • Multi-transaction cells: pdfplumber merges two rows with '\\n'
         e.g. description='TXN_A\\nTXN_B', withdrawals='10.00\\n20.00', date='FEB01\\nFEB03'
         → split and treat as 2 separate transactions
+      • Split-column merge: two transactions merged where one is a debit and the
+        next is a credit — wd and dep each have only one value (no \\n) but
+        description has two. Yield the debit now; carry the credit to the next
+        sub-entry.
       • Skip: STARTINGBALANCE, empty rows, totals row (no date)
       • Deposits column → type='credit', Withdrawals → type='debit'
+
+    Returns (transactions, dropped) where dropped counts rows skipped unexpectedly.
     """
     results = []
+    dropped = 0
     rows = [[str(c or "").strip() for c in row] for row in table]
 
     if not rows:
@@ -402,11 +413,17 @@ def _parse_td_table(table: list[list]) -> list[dict]:
         # dep_carry: when pdfplumber merges a fee row (e.g. MONTHLYACCOUNTFEE)
         # with its rebate row (ACCTFEEREBATE), the fee summary box at the bottom
         # of the page bleeds into the last merged row.  The pattern we see is:
-        #   sub-entry 0 (fee):    wd="17.95"  dep="17.95"   ← dep mirrors wd
-        #   sub-entry 1 (rebate): wd="11,298.26" dep="53,596.69" ← both garbage
-        # The real credit amount (17.95) appears in dep[0] not dep[1].
+        #   sub-entry 0 (fee):    wd="X.XX"  dep="X.XX"   ← dep mirrors wd
+        #   sub-entry 1 (rebate): wd="garbage" dep="garbage" ← both contaminated
+        # The real credit amount appears in dep[0] not dep[1].
         # dep_carry saves it from entry 0 and applies it to the contaminated entry 1.
         dep_carry: Optional[str] = None
+
+        # split_dep_carry: when two transactions (one debit, one credit) are merged
+        # into a single pdfplumber cell, the amount columns each have only ONE value
+        # (no \n) but description has two.  We yield the debit immediately and carry
+        # the deposit amount to the next sub-entry.
+        split_dep_carry: Optional[str] = None
 
         for desc, raw_d, wd, dep, bal in zip(descs, dates, wds, deps, bals):
             # Skip non-transaction rows (opening/closing balance labels, blanks)
@@ -431,6 +448,13 @@ def _parse_td_table(table: list[list]) -> list[dict]:
             if wd_clean and wd_clean == bal_clean:
                 wd_clean = ""
 
+            # Apply split-column carry: the previous sub-entry was a debit half of
+            # a merged pair; this sub-entry is the credit half.
+            if split_dep_carry is not None:
+                if not wd_clean and not dep_clean:
+                    dep_clean = split_dep_carry
+                split_dep_carry = None
+
             # Guard 2: fee-summary contamination in merged rows
             # A real transaction should appear in ONLY one of wd or dep.
             # When both are non-empty it signals bleed-in from adjacent table content.
@@ -447,12 +471,11 @@ def _parse_td_table(table: list[list]) -> list[dict]:
                     dep_clean = dep_carry
                     dep_carry = None
                 else:
-                    # Both columns differ, no carry — unrecognised contamination; skip.
-                    log.debug(
-                        "Skipping contaminated entry: desc=%r wd=%s dep=%s",
-                        desc, wd_clean, dep_clean,
-                    )
-                    continue
+                    # Split-column merge: pdfplumber packed a debit and a credit into
+                    # the same cell (each amount column has only one value, no \n).
+                    # Yield the debit now and carry the credit to the next sub-entry.
+                    split_dep_carry = dep_clean
+                    dep_clean = ""
             else:
                 dep_carry = None   # normal single-column row; clear any pending carry
 
@@ -462,9 +485,22 @@ def _parse_td_table(table: list[list]) -> list[dict]:
                 elif dep_clean and float(dep_clean) > 0:
                     amount, txn_type = round(float(dep_clean), 2), "credit"
             except ValueError:
+                dropped += 1
+                console.print(
+                    f"  [yellow]⚠ drop:[/yellow] unparseable amount for "
+                    f"[dim]{desc[:50]!r}[/dim] on {date}"
+                )
                 continue
 
             if amount is None:
+                # Row has a date and description but no usable amount — warn if
+                # it looks like a real transaction (not a filler/blank row).
+                if desc and desc.lower().replace(" ", "") not in _TD_SKIP_DESCRIPTIONS:
+                    dropped += 1
+                    console.print(
+                        f"  [yellow]⚠ drop:[/yellow] no amount found for "
+                        f"[dim]{desc[:50]!r}[/dim] on {date}"
+                    )
                 continue
 
             results.append({
@@ -474,7 +510,7 @@ def _parse_td_table(table: list[list]) -> list[dict]:
                 "type": txn_type,
             })
 
-    return results
+    return results, dropped
 
 
 # Generic date regex (for non-TD PDFs)
@@ -556,11 +592,17 @@ _TD_VISA_SKIP_RE = re.compile(
     r"PAYMENT\s+DUE\s+DATE|"
     r"OPENING\s+BALANCE|"
     r"CLOSING\s+BALANCE|"
+    r"NEW\s+BALANCE|"
     r"TOTAL\s*(NEW\s*)?BALANCE|"
     r"TOTAL\s+(CREDITS?|DEBITS?|CHARGES?)|"
-    r"INTEREST\s+(CHARGED|RATE|FREE)|"
+    r"PAYMENTS?\s*[&and]+\s*CREDITS?|"        # balance summary rows
+    r"PURCHASES?\s*[&and]+\s*OTHER\s*CHARGES?|"
+    r"CASH\s+ADVANCES?|"
+    r"SUB-?TOTAL|"
+    r"INTEREST\s*(CHARGED|RATE|FREE|\$)|"     # "Interest $0.00" summary
     r"ANNUAL\s+FEE|"
-    r"^\s*\d{1,4}\s*$",   # bare page numbers / single numbers
+    r"TD\s+CANADA\s+TRUST|"                  # payment stub line
+    r"^\s*\d{1,4}\s*$",                      # bare page numbers / single numbers
     re.IGNORECASE,
 )
 
@@ -575,7 +617,10 @@ def _is_td_visa_text(text: str) -> bool:
     return bool(_TD_VISA_TXN_RE.search(text))
 
 
-def _parse_td_visa_text(text: str) -> list[dict]:
+_SUSPECT_CC_AMOUNT_RE = re.compile(r"-?\$[\d,]+\.\d{2}")
+
+
+def _parse_td_visa_text(text: str) -> tuple[list[dict], int]:
     """
     Parse TD Visa CC statement raw text (no tables).
 
@@ -585,8 +630,13 @@ def _parse_td_visa_text(text: str) -> list[dict]:
 
     Negative amounts → type='credit' (payment/refund reducing balance).
     Positive amounts → type='debit'  (purchase/charge).
+
+    Returns (transactions, dropped) where dropped counts lines that contained a
+    dollar amount but did not match the transaction pattern — possible extraction
+    artefact worth investigating.
     """
     results = []
+    dropped = 0
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -594,10 +644,18 @@ def _parse_td_visa_text(text: str) -> list[dict]:
 
         # Transaction regex takes priority — if a line starts with two dates
         # it's a transaction even if it also contains side-panel summary text
-        # (e.g. "JAN27 JAN28 APPLE.COM $1.44 Payment Due Date Mar.20").
+        # (e.g. "JAN27 JAN28 SOME MERCHANT $9.99 Payment Due Date Mar.20").
         # The skip regex is only applied to lines that don't look like transactions.
         m = _TD_VISA_TXN_RE.match(line)
         if not m:
+            # Warn if the line has a dollar amount but no matching date prefix —
+            # this can happen when x_tolerance=1 spaces out date characters.
+            if _SUSPECT_CC_AMOUNT_RE.search(line) and not _TD_VISA_SKIP_RE.search(line):
+                dropped += 1
+                console.print(
+                    f"  [yellow]⚠ drop:[/yellow] line has amount but no date match "
+                    f"[dim]{line[:70]!r}[/dim]"
+                )
             continue
 
         raw_date_str = m.group(1)
@@ -628,7 +686,7 @@ def _parse_td_visa_text(text: str) -> list[dict]:
             "type": txn_type,
         })
 
-    return results
+    return results, dropped
 
 
 def _extract_text_spaced(page) -> str:
@@ -668,9 +726,11 @@ def parse_pdf(file_path: Path) -> list[dict]:
          a. Looks like CC statement → _parse_td_visa_text()
          b. Otherwise → generic _extract_from_text() fallback
 
-    Returns list of dicts: {date, description, amount, type}
+    Returns (transactions, dropped) where dropped counts rows that were skipped
+    unexpectedly and printed a warning during parsing.
     """
     transactions = []
+    total_dropped = 0
 
     try:
         with pdfplumber.open(file_path) as pdf:
@@ -684,7 +744,9 @@ def parse_pdf(file_path: Path) -> list[dict]:
                             continue
                         header = [str(c or "").strip() for c in table[0]]
                         if _is_td_transaction_table(header):
-                            transactions.extend(_parse_td_table(table))
+                            rows, d = _parse_td_table(table)
+                            transactions.extend(rows)
+                            total_dropped += d
                         # All other tables (account info, fees, etc.) are silently ignored
                         # — they contain no transaction data we need
 
@@ -697,7 +759,9 @@ def parse_pdf(file_path: Path) -> list[dict]:
                         # x_tolerance=1 is only safe once we know it's CC format;
                         # it can garble other banks' PDFs with tight character kerning.
                         spaced_text = _extract_text_spaced(page)
-                        transactions.extend(_parse_td_visa_text(spaced_text))
+                        rows, d = _parse_td_visa_text(spaced_text)
+                        transactions.extend(rows)
+                        total_dropped += d
                     else:
                         # Generic fallback for other bank PDFs — keep default params
                         transactions.extend(_extract_from_text(default_text))
@@ -705,7 +769,7 @@ def parse_pdf(file_path: Path) -> list[dict]:
     except Exception as e:
         console.print(f"[red]  PDF parse error for {file_path.name}: {e}[/red]")
 
-    return transactions
+    return transactions, total_dropped
 
 
 # ── Account detection ────────────────────────────────────────────────────────
@@ -876,7 +940,7 @@ def insert_transactions(
 # For CC statements  : "Purchases & Other Charges $X.XX" and "Payments & Credits $X.XX"
 # For chequing PDFs  : "Starting Balance" and ending balance from the Balance column
 
-# CC statement — "Purchases & Other Charges $1,567.01"
+# CC statement — "Purchases & Other Charges $X.XX"
 _CC_CHARGES_RE  = re.compile(r"Purchases?\s*[&and]+\s*Other\s*Charges?\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
 _CC_PAYMENTS_RE = re.compile(r"Payments?\s*[&and]+\s*Credits?\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
 _CC_NEW_BAL_RE  = re.compile(r"NEW\s*BALANCE\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
@@ -1027,8 +1091,9 @@ def parse_new_statements(
         suffix = file_path.suffix.lower()
         if suffix == ".csv":
             rows = parse_csv(file_path)
+            parse_dropped = 0
         elif suffix == ".pdf":
-            rows = parse_pdf(file_path)
+            rows, parse_dropped = parse_pdf(file_path)
         else:
             continue
 
@@ -1039,6 +1104,7 @@ def parse_new_statements(
             "inserted": counts["inserted"],
             "skipped":  counts["skipped"],
             "failed":   counts["failed"],
+            "dropped":  parse_dropped,
             "status": "imported",
         })
 
@@ -1115,15 +1181,21 @@ def _print_results_table(results: list[dict]) -> None:
     table.add_column("Inserted", justify="right", style="bold green")
     table.add_column("Skipped",  justify="right", style="yellow")
     table.add_column("Failed",   justify="right", style="red")
+    table.add_column("Dropped",  justify="right")
     table.add_column("Status",   style="dim")
 
     for r in results:
+        dropped = r.get("dropped", 0)
+        dropped_str = (
+            f"[bold red]{dropped}[/bold red]" if dropped > 0 else "[dim]0[/dim]"
+        )
         table.add_row(
             r["file"],
             str(r["parsed"]),
             str(r["inserted"]),
             str(r["skipped"]),
             str(r["failed"]),
+            dropped_str,
             r.get("status", ""),
         )
 

@@ -9,22 +9,26 @@ get a categorized spending report powered by a local AI model.
 
 ```
 finance-agent/
-├── run.py                  ← main entry point
-├── config.py               ← paths, settings, category list
+├── run.py                        ← main entry point
+├── config.py                     ← paths, settings, category list
 ├── db/
-│   ├── schema.sql          ← SQLite table definitions
-│   └── init_db.py          ← creates finance.db from schema
-├── data/
-│   └── statements/         ← drop PDFs / CSVs here
+│   ├── schema.sql                ← SQLite table definitions
+│   └── init_db.py                ← creates finance.db from schema
 ├── src/
-│   ├── parser.py           ← PDF + CSV parsing (Phase 2)
-│   ├── categorizer.py      ← AI categorization via Ollama (Phase 3)
-│   ├── context_builder.py  ← assembles DB data for AI (Phase 4)
-│   └── reporter.py         ← terminal report printer (Phase 5)
-├── bills.json              ← your recurring bills
-├── profile.txt             ← your financial profile (read by AI)
-├── finance.db              ← SQLite database (auto-created, git-ignored)
-└── requirements.txt
+│   ├── parser.py                 ← PDF + CSV parsing (Phase 2)
+│   ├── categorizer.py            ← AI categorization (Phase 3)
+│   ├── context_builder.py        ← assembles DB data for AI (Phase 4)
+│   └── reporter.py               ← terminal report printer (Phase 5)
+├── scripts/
+│   ├── reset_and_reimport.py     ← wipe + re-parse all statements
+│   └── check_db.py               ← read-only sanity check before committing
+├── data/
+│   └── statements/               ← drop PDFs / CSVs here (git-ignored)
+├── docs/                         ← architecture notes
+├── bills.json                    ← recurring bills config
+├── profile.example.txt           ← template — copy to profile.txt and fill in
+├── profile.txt                   ← your financial profile (git-ignored)
+└── finance.db                    ← SQLite database (auto-created, git-ignored)
 ```
 
 ---
@@ -49,17 +53,20 @@ python run.py   # initialises DB and runs the agent
 
 | Feature | Detail |
 |---|---|
-| CSV parsing | Auto-sniffs delimiter; handles TD headerless format (no column row) and generic headers |
-| PDF parsing | Uses `pdfplumber` table extraction with a TD-specific parser; falls back to raw text for non-TD PDFs |
+| CSV parsing | Auto-sniffs delimiter; handles TD headerless format and generic headers |
+| PDF parsing | `pdfplumber` table extraction with a TD-specific parser; falls back to raw text for CC statements and generic text for other banks |
+| CC text parsing | Handles TD Visa raw-text layout (no tables); uses tighter character spacing to restore merchant name word breaks |
 | Date normalisation | `python-dateutil` handles any format; no-year dates (e.g. `FEB02`) infer year automatically |
 | Deduplication | Two-layer: file-level skip (already imported?) + row-level MD5 hash check |
-| Personal info scrubbing | Strips names from e-transfer descriptions before DB storage |
-| Account number sanitisation | Strips account numbers from filenames before storing in `source_file` |
-| Account detection | Infers account label (`td_chequing`, `td_visa`, etc.) from filename |
-| Pre-categorization rules | Obvious transactions (transfers, bills, income) get a locked category at import time — AI won't overwrite |
-
-**Schema additions:**
-- `transactions.account` — tracks which bank account each transaction came from (prevents credit card double-counting in reports)
+| Duplicate transactions | Same merchant, same date, same amount on the same day both insert correctly via an occurrence counter in the hash |
+| Split-column merge fix | Handles pdfplumber merging a debit and a credit from the same day into one table cell — both transactions are recovered |
+| Personal info scrubbing | Strips names from e-transfer and cheque descriptions before DB storage |
+| Description cleanup | Strips TD chequing `_V`/`_F` transaction-type suffixes from merchant names |
+| Account number sanitisation | Strips card/account numbers from filenames before storing in `source_file` |
+| Account detection | Infers account label (`chequing`, `creditcard`, `savings`, `loc`) from filename |
+| Pre-categorization rules | Obvious transactions (transfers, bills, income) get a locked category at import — AI won't overwrite |
+| Drop warnings | Any row with a dollar amount that couldn't be parsed as a transaction prints a `⚠ drop:` warning inline and increments the **Dropped** counter in the summary table |
+| Balance reconciliation | After import, parsed DB totals are checked against the statement's own declared figures — `✓` or `⚠` per file |
 
 ### Running the parser
 
@@ -67,7 +74,7 @@ python run.py   # initialises DB and runs the agent
 # Normal run — parses any new files in data/statements/
 python run.py
 
-# Self-test with 5 fake transactions (no real statement needed)
+# Self-test with synthetic transactions (no real statement needed)
 python src/parser.py --test
 
 # Debug: inspect raw pdfplumber output for a PDF
@@ -80,20 +87,33 @@ python src/parser.py --inspect data/statements/your-file.pdf
 2. Drop it into `data/statements/`
 3. Run `python run.py`
 
-The parser auto-detects the file, imports it, and skips it on future runs.
+The parser auto-detects the file, imports new rows, and skips it on future runs.
 
-### Reset the database
+### Reset and reimport
+
+Use this when testing parser changes or after replacing a statement file:
 
 ```bash
-rm finance.db
-python run.py   # reinitialises from scratch
+python scripts/reset_and_reimport.py
 ```
 
-Your statement files in `data/statements/` are untouched — they'll re-import cleanly.
+Clears all transaction rows (schema intact), re-parses every file in `data/statements/`,
+then prints a reconciliation table, transfer highlights, and per-account summary.
+
+### Sanity check before committing
+
+```bash
+python scripts/check_db.py
+```
+
+Read-only. Shows row counts, date ranges, category coverage, duplicate hash check,
+data quality check, and a spot-check of recent transactions.
 
 ### Pre-categorization rules
 
-Transactions matching known patterns are categorised and locked (`confirmed=1`) at import, before the AI runs in Phase 3. Add your own merchants to `_PRECATEGORY_RULES` in `src/parser.py`:
+Transactions matching known patterns are categorised and locked (`confirmed=1`) at import,
+before the AI runs in Phase 3. Add your own merchants to `_PRECATEGORY_RULES` in
+`src/parser.py`:
 
 ```python
 (re.compile(r"LOBLAWS|SUPERSTORE|METRO", re.IGNORECASE), "groceries"),
@@ -102,19 +122,17 @@ Transactions matching known patterns are categorised and locked (`confirmed=1`) 
 
 ### Credit card double-counting
 
-Each transaction stores its `account` (e.g. `td_chequing`, `td_visa`). The Visa payment row in chequing (`TDVISAPREAUTHPYMT`) is auto-categorized as `transfer` and excluded from spending totals in Phase 4 reports. Individual Visa transactions are the real spending data.
-
-### Phase 2 Checklist
-
-- [ ] `python src/parser.py --test` → 5 inserted, run again → 0 inserted
-- [ ] Drop a real bank statement → `python run.py` → transactions appear in DB
-- [ ] Open `finance.db` → transactions table populated with correct account/category
+Each transaction stores its `account` (e.g. `chequing`, `creditcard`). The Visa payment
+row in chequing is auto-categorized as `transfer` and excluded from spending totals. The
+individual Visa transactions are the real spending data. Both sides are cross-matched and
+shown in the transfer highlights table.
 
 ---
 
 ## Inspecting the Database
 
-No server needed — `finance.db` is a single file. Open it with [DB Browser for SQLite](https://sqlitebrowser.org/dl/) (free) via **File → Open Database**.
+No server needed — `finance.db` is a single file. Open it with
+[DB Browser for SQLite](https://sqlitebrowser.org/dl/) (free) via **File → Open Database**.
 
 ---
 
@@ -137,7 +155,8 @@ Edit `bills.json` directly. Each entry supports:
 
 ## Your Profile
 
-`profile.txt` is git-ignored. Copy the template and fill it in — the AI reads it on every run to personalise advice:
+`profile.txt` is git-ignored. Copy the template and fill it in — the AI reads it on every
+run to personalise advice:
 
 ```bash
 cp profile.example.txt profile.txt
@@ -154,6 +173,3 @@ cp profile.example.txt profile.txt
 | 3     | AI categorization (Ollama)    | Upcoming   |
 | 4     | Context builder               | Upcoming   |
 | 5     | Terminal report               | Upcoming   |
-
----
-
