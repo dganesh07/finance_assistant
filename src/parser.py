@@ -865,31 +865,39 @@ def sanitize_source_filename(filename: str) -> str:
 # These are NOT overwritten by the AI (confirmed=1 protects them).
 # Add rows here as you discover recurring patterns in your statements.
 
-_PRECATEGORY_RULES: list[tuple[re.Pattern, str]] = [
+_PRECATEGORY_RULES: list[tuple[re.Pattern, str, int]] = [
+    # Each entry: (pattern, category, confirmed)
+    # confirmed=1 → AI will NOT overwrite this in Phase 3 (use for certainties)
+    # confirmed=0 → AI/human review CAN correct this (use for educated guesses)
+
     # ── Transfers / payments ──────────────────────────────────────────────────
-    # TD Visa pre-authorized payment (Visa bill paid from chequing)
-    (re.compile(r"TDVISAPREAUTHPYMT|TD\s*VISA\s*PREAUTH", re.IGNORECASE), "transfer"),
-    # TD Visa CC statement: pre-authorized payment received on the card
-    # (mirrors TDVISAPREAUTHPYMT in chequing — same transaction, opposite side)
-    (re.compile(r"PREAUTHORIZED\s*PAYMENT|PAYMENT\s*[-–]?\s*THANK\s+YOU", re.IGNORECASE), "transfer"),
-    # TD Line of Credit payment
-    (re.compile(r"TD\s*LOC\s*PYMT|TDLOC", re.IGNORECASE), "transfer"),
-    # Generic internal TD account transfers
-    (re.compile(r"SENDE?-?TFR|SEND\s*TRANSFER", re.IGNORECASE), "transfer"),
-    # Incoming e-transfers / deposits from another account
-    (re.compile(r"RECV\s*TFR|RECEIVE\s*TRANSFER|INTERNET\s*TRANSFER", re.IGNORECASE), "transfer"),
+    # TD Visa pre-authorized payment (Visa bill paid from chequing) — certain
+    (re.compile(r"TDVISAPREAUTHPYMT|TD\s*VISA\s*PREAUTH", re.IGNORECASE), "transfer", 1),
+    # TD Visa CC statement: pre-authorized payment received on the card — certain
+    (re.compile(r"PREAUTHORIZED\s*PAYMENT|PAYMENT\s*[-–]?\s*THANK\s+YOU", re.IGNORECASE), "transfer", 1),
+    # TD Line of Credit payment — certain
+    (re.compile(r"TD\s*LOC\s*PYMT|TDLOC", re.IGNORECASE), "transfer", 1),
+    # Outgoing e-Transfer (SENDE-TFR, SENDE-TFR***xyz) — confirmed=0 because
+    # some are rent/bills paid to landlord via e-transfer, not just internal
+    # account moves.  The AI categorizer (Phase 3) and human review can correct
+    # individual entries to 'bills_utilities' or other categories.
+    (re.compile(r"SENDE?-?TFR|SEND\s*TRANSFER", re.IGNORECASE), "transfer", 0),
+    # Cancelled/reversed e-Transfer — always a transfer reversal, certain
+    (re.compile(r"CANCELE?-?TFR|CANCEL\s*TRANSFER", re.IGNORECASE), "transfer", 1),
+    # Incoming e-transfers / deposits from another account — certain
+    (re.compile(r"RECV\s*TFR|RECEIVE\s*TRANSFER|INTERNET\s*TRANSFER", re.IGNORECASE), "transfer", 1),
 
     # ── Income ────────────────────────────────────────────────────────────────
-    (re.compile(r"PAYROLL|DIRECT\s*DEP|DIRECT\s*DEPOSIT", re.IGNORECASE), "income"),
+    (re.compile(r"PAYROLL|DIRECT\s*DEP|DIRECT\s*DEPOSIT", re.IGNORECASE), "income", 1),
 
     # ── Bills ─────────────────────────────────────────────────────────────────
-    (re.compile(r"BCHYDRO|BC\s*HYDRO", re.IGNORECASE), "bills_utilities"),
-    (re.compile(r"ENMAX|HYDRO\s*ONE|TORONTO\s*HYDRO|ENBRIDGE", re.IGNORECASE), "bills_utilities"),
-    (re.compile(r"ROGERS|BELL\s*CANADA|TELUS|KOODO|FIDO|VIRGIN\s*MOBILE", re.IGNORECASE), "bills_utilities"),
+    (re.compile(r"BCHYDRO|BC\s*HYDRO", re.IGNORECASE), "bills_utilities", 1),
+    (re.compile(r"ENMAX|HYDRO\s*ONE|TORONTO\s*HYDRO|ENBRIDGE", re.IGNORECASE), "bills_utilities", 1),
+    (re.compile(r"ROGERS|BELL\s*CANADA|TELUS|KOODO|FIDO|VIRGIN\s*MOBILE", re.IGNORECASE), "bills_utilities", 1),
 
     # ── Bank fees (then rebated) ───────────────────────────────────────────────
-    (re.compile(r"MONTHLYACCOUNTFEE|MONTHLY\s*ACCOUNT\s*FEE", re.IGNORECASE), "fees"),
-    (re.compile(r"ACCTFEEREBATE|ACCOUNT\s*FEE\s*REBATE", re.IGNORECASE), "fees"),
+    (re.compile(r"MONTHLYACCOUNTFEE|MONTHLY\s*ACCOUNT\s*FEE", re.IGNORECASE), "fees", 1),
+    (re.compile(r"ACCTFEEREBATE|ACCOUNT\s*FEE\s*REBATE", re.IGNORECASE), "fees", 1),
 ]
 
 
@@ -898,12 +906,13 @@ def precategorize(description: str) -> tuple[str, int]:
     Check description against known patterns.
 
     Returns (category, confirmed) where confirmed=1 means the AI won't
-    overwrite this category in Phase 3.
+    overwrite this category in Phase 3, confirmed=0 means it's an educated
+    guess that AI/human review can still correct.
     Returns ('unknown', 0) if no rule matches.
     """
-    for pattern, category in _PRECATEGORY_RULES:
+    for pattern, category, confirmed in _PRECATEGORY_RULES:
         if pattern.search(description):
-            return category, 1
+            return category, confirmed
     return "unknown", 0
 
 

@@ -64,7 +64,7 @@ python run.py   # initialises DB and runs the agent
 | Description cleanup | Strips TD chequing `_V`/`_F` transaction-type suffixes from merchant names |
 | Account number sanitisation | Strips card/account numbers from filenames before storing in `source_file` |
 | Account detection | Infers account label (`chequing`, `creditcard`, `savings`, `loc`) from filename |
-| Pre-categorization rules | Obvious transactions (transfers, bills, income) get a locked category at import — AI won't overwrite |
+| Pre-categorization rules | Obvious transactions (transfers, bills, income) are categorized at import. `confirmed=1` locks the category so AI won't overwrite it; `confirmed=0` leaves it open for AI/human review (e.g. outgoing e-transfers that might be rent) |
 | Drop warnings | Any row with a dollar amount that couldn't be parsed as a transaction prints a `⚠ drop:` warning inline and increments the **Dropped** counter in the summary table |
 | Balance reconciliation | After import, parsed DB totals are checked against the statement's own declared figures — `✓` or `⚠` per file |
 
@@ -79,6 +79,9 @@ python src/parser.py --test
 
 # Debug: inspect raw pdfplumber output for a PDF
 python src/parser.py --inspect data/statements/your-file.pdf
+
+# Re-parse a single file after a parser fix (clears old rows, re-inserts fresh)
+python src/parser.py --reimport data/statements/your-file.pdf
 ```
 
 ### Dropping in a statement
@@ -116,8 +119,11 @@ before the AI runs in Phase 3. Add your own merchants to `_PRECATEGORY_RULES` in
 `src/parser.py`:
 
 ```python
-(re.compile(r"LOBLAWS|SUPERSTORE|METRO", re.IGNORECASE), "groceries"),
-(re.compile(r"TIM HORTONS|STARBUCKS",    re.IGNORECASE), "food_dining"),
+# (pattern, category, confirmed)
+# confirmed=1 → AI won't overwrite this (use for certainties)
+# confirmed=0 → AI/human review can still correct it
+(re.compile(r"LOBLAWS|SUPERSTORE|METRO", re.IGNORECASE), "groceries",  1),
+(re.compile(r"TIM HORTONS|STARBUCKS",    re.IGNORECASE), "food_dining", 1),
 ```
 
 ### Credit card double-counting
