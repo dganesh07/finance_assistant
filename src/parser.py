@@ -311,6 +311,8 @@ _TD_SKIP_DESCRIPTIONS = {
     "starting balance",
     "closingbalance",
     "closing balance",
+    "balanceforward",
+    "balance forward",
     "",
 }
 
@@ -401,8 +403,19 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
         # Balance column — used only to detect when its value bleeds into wds/deps
         bals  = [d.strip() for d in (row[bal_idx].split("\n") if bal_idx is not None else [""])]
 
-        # Align all lists to max length (pad with "")
-        n = max(len(descs), len(dates), len(wds), len(deps))
+        # Base n only on descriptions and dates — NOT wds/deps.
+        # The last row on each TD page has extra amount values that are
+        # running page totals (TD statement artifact), not real sub-entries.
+        # Including them in n would create phantom sub-entries.
+        n = max(len(descs), len(dates))
+
+        # Page-total bleed: if wd has MORE values than descriptions, the
+        # surplus values are the page withdrawal total injected by TD's PDF
+        # renderer. When this happens, dep also holds the page deposit total
+        # (not a real credit) — discard both surpluses.
+        if len(wds) > n:
+            wds  = wds[:n]
+            deps = [""] * n
 
         descs = _pad(descs, n)
         dates = _pad(dates, n)
@@ -419,11 +432,13 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
         # dep_carry saves it from entry 0 and applies it to the contaminated entry 1.
         dep_carry: Optional[str] = None
 
-        # split_dep_carry: when two transactions (one debit, one credit) are merged
+        # split_wd_carry: when two transactions (one credit, one debit) are merged
         # into a single pdfplumber cell, the amount columns each have only ONE value
-        # (no \n) but description has two.  We yield the debit immediately and carry
-        # the deposit amount to the next sub-entry.
-        split_dep_carry: Optional[str] = None
+        # (no \n) but description has two.  We yield the credit immediately and carry
+        # the withdrawal amount to the next sub-entry.
+        # NOTE: TD bank statements consistently show the credit entry first in merged
+        # pairs (e.g. TD CHQ Offer MSP credit on JAN14 merged with Amazon debit JAN15).
+        split_wd_carry: Optional[str] = None
 
         for desc, raw_d, wd, dep, bal in zip(descs, dates, wds, deps, bals):
             # Skip non-transaction rows (opening/closing balance labels, blanks)
@@ -448,17 +463,29 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
             if wd_clean and wd_clean == bal_clean:
                 wd_clean = ""
 
-            # Apply split-column carry: the previous sub-entry was a debit half of
-            # a merged pair; this sub-entry is the credit half.
-            if split_dep_carry is not None:
+            # Parse as floats for Guard 2 — avoids "0.00" being truthy as a string
+            # while being a useless amount (page deposit total = $0 bleeds into dep).
+            try:
+                wd_val = float(wd_clean) if wd_clean else 0.0
+            except ValueError:
+                wd_val = 0.0
+            try:
+                dep_val = float(dep_clean) if dep_clean else 0.0
+            except ValueError:
+                dep_val = 0.0
+
+            # Apply split-column carry: the previous sub-entry was the credit half of
+            # a merged pair; this sub-entry is the debit half.
+            if split_wd_carry is not None:
                 if not wd_clean and not dep_clean:
-                    dep_clean = split_dep_carry
-                split_dep_carry = None
+                    wd_clean = split_wd_carry
+                    wd_val   = float(wd_clean)
+                split_wd_carry = None
 
             # Guard 2: fee-summary contamination in merged rows
             # A real transaction should appear in ONLY one of wd or dep.
-            # When both are non-empty it signals bleed-in from adjacent table content.
-            if wd_clean and dep_clean:
+            # Both non-zero (by float value) signals bleed-in from adjacent content.
+            if wd_val > 0 and dep_val > 0:
                 if wd_clean == dep_clean:
                     # Equal values: this is the fee row (e.g. MONTHLYACCOUNTFEE).
                     # dep value is really the rebate that belongs to the NEXT entry.
@@ -471,13 +498,19 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
                     dep_clean = dep_carry
                     dep_carry = None
                 else:
-                    # Split-column merge: pdfplumber packed a debit and a credit into
+                    # Split-column merge: pdfplumber packed a credit and a debit into
                     # the same cell (each amount column has only one value, no \n).
-                    # Yield the debit now and carry the credit to the next sub-entry.
-                    split_dep_carry = dep_clean
-                    dep_clean = ""
+                    # Yield the credit now and carry the withdrawal to the next sub-entry.
+                    split_wd_carry = wd_clean
+                    wd_clean = ""
             else:
-                dep_carry = None   # normal single-column row; clear any pending carry
+                # If this sub-entry has no amounts of its own but dep_carry is set,
+                # apply the carry now (e.g. CANCELE-TFR follows SENDE-TFR with equal
+                # wd==dep; the cancel credit belongs to this empty sub-entry).
+                if dep_carry is not None and not wd_clean and not dep_clean:
+                    dep_clean = dep_carry
+                    dep_val   = float(dep_carry)
+                dep_carry = None   # clear after applying (or when not needed)
 
             try:
                 if wd_clean and float(wd_clean) > 0:
@@ -1230,16 +1263,71 @@ def inspect_pdf(file_path: Path) -> None:
                         console.print(f"  {line}")
 
 
+def reimport_file(file_path: Path, db_path: Path = DB_PATH) -> None:
+    """
+    Delete all transactions for a previously-imported file and re-parse it.
+
+    Useful after fixing a parser bug — clears the old (wrong) rows so the
+    corrected parser can insert fresh ones.
+
+    Usage:
+        python src/parser.py --reimport data/statements/MY_CHEQUING.pdf
+    """
+    filename = sanitize_source_filename(file_path.name)
+    conn = sqlite3.connect(db_path)
+
+    existing = conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE source_file = ?", (filename,)
+    ).fetchone()[0]
+
+    if existing == 0:
+        console.print(f"[yellow]No transactions found for '{filename}' — nothing to delete.[/yellow]")
+        console.print("[dim]Running fresh import...[/dim]")
+    else:
+        conn.execute("DELETE FROM transactions WHERE source_file = ?", (filename,))
+        conn.commit()
+        console.print(f"[red]Deleted {existing} existing transaction(s) for '{filename}'[/red]")
+
+    conn.close()
+
+    account = detect_account(file_path.name)
+    console.print(f"[cyan]Re-parsing:[/cyan] {file_path.name}  [dim]→ account: {account}[/dim]")
+
+    suffix = file_path.suffix.lower()
+    conn = sqlite3.connect(db_path)
+    if suffix == ".csv":
+        rows = parse_csv(file_path)
+        dropped = 0
+    elif suffix == ".pdf":
+        rows, dropped = parse_pdf(file_path)
+    else:
+        console.print(f"[red]Unsupported file type: {suffix}[/red]")
+        conn.close()
+        return
+
+    counts = insert_transactions(conn, rows, filename, account)
+    conn.close()
+
+    console.print(
+        f"[green]Re-import done:[/green] "
+        f"{counts['inserted']} inserted, {counts['skipped']} skipped, "
+        f"{counts['failed']} failed, {dropped} dropped"
+    )
+
+
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--test",    action="store_true", help="Run self-test with fake CSV data")
-    arg_parser.add_argument("--inspect", metavar="FILE",      help="Debug: dump raw pdfplumber output for a PDF")
+    arg_parser.add_argument("--test",     action="store_true", help="Run self-test with fake CSV data")
+    arg_parser.add_argument("--inspect",  metavar="FILE",      help="Debug: dump raw pdfplumber output for a PDF")
+    arg_parser.add_argument("--reimport", metavar="FILE",      help="Delete existing rows for a file and re-parse it")
     args = arg_parser.parse_args()
 
     if args.test:
         run_test()
     elif args.inspect:
         inspect_pdf(Path(args.inspect))
+    elif args.reimport:
+        reimport_file(Path(args.reimport))
     else:
         results = parse_new_statements()
         _print_results_table(results)
