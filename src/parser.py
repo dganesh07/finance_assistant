@@ -366,7 +366,7 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
     rows = [[str(c or "").strip() for c in row] for row in table]
 
     if not rows:
-        return results
+        return results, dropped
 
     # Identify column indices from header
     header = [c.lower() for c in rows[0]]
@@ -374,7 +374,7 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
         desc_idx = header.index("description")
         date_idx = header.index("date")
     except ValueError:
-        return results
+        return results, dropped
 
     wd_idx  = next((i for i, c in enumerate(header) if "withdrawal" in c), None)
     dep_idx = next((i for i, c in enumerate(header) if "deposit"    in c), None)
@@ -630,13 +630,15 @@ _TD_VISA_SKIP_RE = re.compile(
     r"TOTAL\s+(CREDITS?|DEBITS?|CHARGES?)|"
     r"PAYMENTS?\s*[&and]+\s*CREDITS?|"        # balance summary rows
     r"PURCHASES?\s*[&and]+\s*OTHER\s*CHARGES?|"
-    r"CASH\s+ADVANCES?|"
+    r"CASH\s*ADVANCES?|"
     r"SUB-?TOTAL|"
     r"INTEREST\s*(CHARGED|RATE|FREE|\$)|"     # "Interest $0.00" summary
     r"ANNUAL\s+FEE|"
+    r"PREVIOUS\s*(?:STATEMENT\s*)?BALANCE|"   # "Previous Balance $0.00" in CC summary
+    r"^\s*FEES?\s|"                           # "Fees $0.00" standalone line in CC summary
     r"TD\s+CANADA\s+TRUST|"                  # payment stub line
     r"^\s*\d{1,4}\s*$",                      # bare page numbers / single numbers
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -719,6 +721,17 @@ def _parse_td_visa_text(text: str) -> tuple[list[dict], int]:
             "type": txn_type,
         })
 
+    # Warn if no transactions were found on a page that looked like CC format.
+    # This typically means the text extraction changed (pdfplumber update, new PDF
+    # layout) and the regex no longer matches — inspect the file to diagnose.
+    if not results and not dropped:
+        has_any_amount = bool(_SUSPECT_CC_AMOUNT_RE.search(text))
+        if has_any_amount:
+            console.print(
+                "  [yellow]⚠ warning:[/yellow] CC page matched no transactions "
+                "but contains dollar amounts — statement format may have changed"
+            )
+
     return results, dropped
 
 
@@ -769,7 +782,7 @@ def parse_pdf(file_path: Path) -> list[dict]:
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
                 tables = page.extract_tables()
-                found_any_table = bool(tables)
+                found_td_txn_table = False
 
                 if tables:
                     for table in tables:
@@ -780,10 +793,14 @@ def parse_pdf(file_path: Path) -> list[dict]:
                             rows, d = _parse_td_table(table)
                             transactions.extend(rows)
                             total_dropped += d
+                            found_td_txn_table = True
                         # All other tables (account info, fees, etc.) are silently ignored
                         # — they contain no transaction data we need
 
-                if not found_any_table:
+                # Fall through to text parsing if no TD transaction table was found.
+                # This handles CC statements (no tables at all) AND the edge case where
+                # pdfplumber detects non-transaction boxes as tables on a CC page.
+                if not found_td_txn_table:
                     # First pass: standard extraction to detect statement type safely
                     default_text = page.extract_text() or ""
                     if _is_td_visa_text(default_text):
@@ -795,12 +812,21 @@ def parse_pdf(file_path: Path) -> list[dict]:
                         rows, d = _parse_td_visa_text(spaced_text)
                         transactions.extend(rows)
                         total_dropped += d
-                    else:
-                        # Generic fallback for other bank PDFs — keep default params
+                    elif not tables:
+                        # Generic fallback only when there are truly no tables.
+                        # If tables exist but are all non-transaction (e.g., account-info
+                        # tables on a chequing page with no transactions), skip the
+                        # fallback to avoid pulling in garbage from fee summaries.
                         transactions.extend(_extract_from_text(default_text))
 
     except Exception as e:
         console.print(f"[red]  PDF parse error for {file_path.name}: {e}[/red]")
+
+    if not transactions:
+        console.print(
+            f"  [yellow]⚠ warning:[/yellow] no transactions extracted from "
+            f"[dim]{file_path.name}[/dim] — run [cyan]--inspect[/cyan] to diagnose"
+        )
 
     return transactions, total_dropped
 
@@ -987,10 +1013,9 @@ _CC_CHARGES_RE  = re.compile(r"Purchases?\s*[&and]+\s*Other\s*Charges?\s+\$?([\d
 _CC_PAYMENTS_RE = re.compile(r"Payments?\s*[&and]+\s*Credits?\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
 _CC_NEW_BAL_RE  = re.compile(r"NEW\s*BALANCE\s+\$?([\d,]+\.\d{2})", re.IGNORECASE)
 
-# Chequing PDF — TD stores totals in the Balance column; we look for a row
-# that contains "CLOSINGBALANCE" or check the last balance cell in the table.
+# Chequing PDF — opening balance row is labelled "STARTINGBALANCE"; closing
+# balance is the last non-empty value in the Balance column across all pages.
 _CHQ_START_BAL_RE  = re.compile(r"STARTINGBALANCE|STARTING\s+BALANCE", re.IGNORECASE)
-_CHQ_CLOSING_RE    = re.compile(r"CLOSINGBALANCE|CLOSING\s+BALANCE",    re.IGNORECASE)
 _DOLLAR_RE         = re.compile(r"\$?([\d,]+\.\d{2})")
 
 
@@ -1049,7 +1074,13 @@ def verify_statement(file_path: Path, account: str) -> dict:
                     result["expected_new_bal"] = _parse_dollar(m.group(1))
 
             elif account == "chequing":
-                # Find opening / closing balance from the transaction table
+                # Find opening / closing balance from the transaction table.
+                #
+                # TD chequing statements don't have a labelled "CLOSING BALANCE" row —
+                # the balance just stops after the last transaction.  We extract:
+                #   opening  → the balance on the STARTINGBALANCE row (first page)
+                #   closing  → the last non-empty balance value across all pages
+                #              (which is the running balance after the final transaction)
                 for page in pdf.pages:
                     for table in (page.extract_tables() or []):
                         if not table or not _is_td_transaction_table(
@@ -1074,14 +1105,15 @@ def verify_statement(file_path: Path, account: str) -> dict:
                             bals  = [b.strip() for b in bal_cell.split("\n")]
 
                             for d, b in zip(descs, bals):
-                                if _CHQ_START_BAL_RE.search(d):
+                                if _CHQ_START_BAL_RE.search(d) and result["opening_balance"] is None:
                                     result["opening_balance"] = _parse_dollar(
                                         re.sub(r"[$,]", "", b)
                                     )
-                                elif _CHQ_CLOSING_RE.search(d):
-                                    result["closing_balance"] = _parse_dollar(
-                                        re.sub(r"[$,]", "", b)
-                                    )
+                                # Track every non-empty balance value; the last one
+                                # seen across all pages becomes the closing balance.
+                                b_val = _parse_dollar(re.sub(r"[$,]", "", b))
+                                if b_val is not None:
+                                    result["closing_balance"] = b_val
     except Exception as e:
         log.debug("verify_statement failed for %s: %s", file_path.name, e)
 
@@ -1205,10 +1237,32 @@ def run_test():
 
         console.print(f"\n[green]DB has {count} transaction(s) — expected 5[/green]")
         if count == 5:
-            console.print("[bold green]✓ Self-test passed[/bold green]")
+            console.print("[bold green]✓ CSV self-test passed[/bold green]")
         else:
-            console.print("[bold red]✗ Self-test failed[/bold red]")
+            console.print("[bold red]✗ CSV self-test failed[/bold red]")
             sys.exit(1)
+
+    # ── Visa PDF smoke test ────────────────────────────────────────────────────
+    # Looks for any TD Visa PDF in data/statements/.  The actual statement files
+    # are not committed to the repo (personal financial data), so this test is
+    # skipped on a clean clone.  When the PDF is present it verifies the parser
+    # produces at least one transaction with zero dropped rows.
+    console.rule("[bold cyan]Visa PDF smoke test[/bold cyan]")
+    visa_pdf = next(STATEMENTS_DIR.glob("TD_CASH_BACK_VISA*.pdf"), None)
+    if visa_pdf is None:
+        console.print("[yellow]  Skipped: no TD Visa PDF found in data/statements/[/yellow]")
+    else:
+        rows, dropped = parse_pdf(visa_pdf)
+        if dropped != 0:
+            console.print(f"[bold red]✗ Visa PDF smoke test failed — {dropped} row(s) dropped[/bold red]")
+            sys.exit(1)
+        if not rows:
+            console.print("[bold red]✗ Visa PDF smoke test failed — 0 transactions parsed[/bold red]")
+            sys.exit(1)
+        console.print(
+            f"[bold green]✓ Visa PDF smoke test passed[/bold green] — "
+            f"{len(rows)} transaction(s) parsed from {visa_pdf.name}, 0 dropped"
+        )
 
 
 def _print_results_table(results: list[dict]) -> None:

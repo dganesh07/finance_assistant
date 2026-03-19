@@ -3,6 +3,13 @@ run.py — Main entry point for the Finance Agent.
 
 Run:  python run.py
 
+Incremental by design: already-imported files are skipped automatically.
+Just drop a new statement into data/statements/ and run this again — only the
+new file is imported; existing transactions are never touched.
+
+To wipe and re-import everything (e.g. after a parser fix), use:
+  python scripts/reset_and_reimport.py
+
 Current flow (Phase 2):
   1. Initialize the SQLite DB if it doesn't exist
   2. Print confirmation + loaded bills
@@ -140,8 +147,14 @@ def main() -> None:
 
     if results:
         _print_results_table(results)
-        total_new = sum(r["inserted"] for r in results)
+        total_new  = sum(r["inserted"] for r in results)
+        total_drop = sum(r.get("dropped", 0) for r in results)
         console.print(f"\n[bold green]{total_new} new transaction(s) added to DB.[/bold green]")
+        if total_drop:
+            console.print(
+                f"[bold yellow]⚠ {total_drop} row(s) dropped during parsing.[/bold yellow]  "
+                "Run [cyan]python src/parser.py --inspect <file>[/cyan] to investigate."
+            )
     else:
         console.print("[dim]No statement files found. Drop a PDF or CSV into data/statements/[/dim]")
 
