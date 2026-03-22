@@ -89,6 +89,44 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
+def _clean_for_llm(description: str) -> str:
+    """
+    Minimal generic cleanup to make bank description strings more readable
+    for the LLM — without hardcoding any merchant names.
+
+    Only structural noise is removed; the words themselves are left as-is
+    so the model can attempt its own recognition.
+
+    Rules:
+      1. Replace * with space  (payment-processor separator: OPENAI*CHATGPT)
+      2. Strip trailing store/branch numbers  (#407, -78, _03, or bare digits)
+      3. Insert a space where letters run directly into digits or vice-versa
+         (T&TSUPERMARKET stays as-is; CANADA78 → CANADA 78, SDM267 → SDM 267)
+      4. Collapse repeated spaces / trim
+    """
+    import re as _re
+
+    desc = description
+
+    # 1. Payment-processor separator
+    desc = desc.replace('*', ' ')
+
+    # 2. Strip trailing store/branch numbers
+    desc = _re.sub(r'#\d+', '', desc)       # #NNN anywhere (e.g. "#21 SURREY" → " SURREY")
+    desc = _re.sub(r'[-_]\d+$', '', desc)   # trailing -NNN or _NNN
+    desc = _re.sub(r'\d{2,}$', '', desc)    # trailing bare digit run (e.g. CANADA78 → CANADA)
+
+    # 3. Space between a letter-run and a digit-run (catches T&TSUPERMARKET → T&T SUPERMARKET
+    #    only when there's no existing separator)
+    desc = _re.sub(r'([A-Za-z])(\d)', r'\1 \2', desc)
+    desc = _re.sub(r'(\d)([A-Za-z])', r'\1 \2', desc)
+
+    # 4. Collapse whitespace
+    desc = _re.sub(r'\s{2,}', ' ', desc).strip()
+
+    return desc
+
+
 def build_prompt(transactions: list[dict], profile: str = "") -> str:
     """
     Build the categorization prompt for one batch.
@@ -101,8 +139,10 @@ def build_prompt(transactions: list[dict], profile: str = "") -> str:
     txn_lines = []
     for i, t in enumerate(transactions, start=1):
         direction = "spent" if t.get("type") == "debit" else "received"
+        # Clean description for LLM readability — original stays in DB
+        readable = _clean_for_llm(t["description"])
         txn_lines.append(
-            f'{i}. "{t["description"]}" — ${t["amount"]:.2f} ({direction})'
+            f'{i}. "{readable}" — ${t["amount"]:.2f} ({direction})'
         )
     txn_block = "\n".join(txn_lines)
 
@@ -180,10 +220,18 @@ def categorize_transactions(transactions: list[dict]) -> list[dict]:
         batch_txns   = [t for _, t in batch_pairs]
         prompt       = build_prompt(batch_txns, profile)
 
+        # ── DEBUG: show what we're sending to Ollama ──────────────────────────
+        batch_end = min(batch_start + BATCH_SIZE, len(needs_llm))
+        print(f"\n── Ollama batch {batch_start + 1}–{batch_end} of {len(needs_llm)} ──")
+        for i, t in enumerate(batch_txns, start=1):
+            readable = _clean_for_llm(t["description"])
+            changed  = readable != t["description"]
+            suffix   = f"  [cleaned from: {t['description']}]" if changed else ""
+            print(f"  {i:2}. {readable}  ${t['amount']:.2f}{suffix}")
+        print()
+        # ──────────────────────────────────────────────────────────────────────
+
         try:
-            print("\n── LLM PROMPT ──────────────────────────────────────────\n")
-            print(prompt)
-            print("────────────────────────────────────────────────────────\n")
             response = ollama.chat(
                 model=OLLAMA_MODEL,
                 messages=[{"role": "user", "content": prompt}],
