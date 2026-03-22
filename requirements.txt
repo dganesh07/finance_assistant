@@ -3,3 +3,5 @@ pandas
 rich
 ollama
 python-dateutil
+fastapi
+uvicorn[standard]

@@ -1,24 +1,16 @@
 """
-run.py — Main entry point for the Finance Agent.
+run.py — Quick DB check and statement import.
 
 Run:  python run.py
 
-Incremental by design: already-imported files are skipped automatically.
-Just drop a new statement into data/statements/ and run this again — only the
-new file is imported; existing transactions are never touched.
+Scans data/statements/ for new PDFs/CSVs, parses them, and inserts raw
+transactions into the DB (category = 'unknown', confirmed = 0).
 
-To wipe and re-import everything (e.g. after a parser fix), use:
+For the full pipeline (parse → categorize → review → save), use:
+  python scripts/ingest.py data/statements/<file.pdf>
+
+To wipe and re-import everything (e.g. after a parser fix):
   python scripts/reset_and_reimport.py
-
-Current flow (Phase 2):
-  1. Initialize the SQLite DB if it doesn't exist
-  2. Print confirmation + loaded bills
-  3. Scan data/statements/ for new PDFs/CSVs and parse them
-  4. Print parse results + total new transactions
-
-Future flow (Phase 3+):
-  5. Categorize new transactions with AI (Ollama)
-  6. Generate and print a spending report
 """
 
 import json
@@ -121,7 +113,6 @@ def main() -> None:
     console.print()
     console.print(Panel(
         Text("FINANCE AGENT", justify="center", style="bold green"),
-        subtitle="[dim]Phase 2 — Parser[/dim]",
         border_style="green",
     ))
     console.print()

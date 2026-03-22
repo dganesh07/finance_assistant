@@ -1,14 +1,20 @@
 """
 src/context_builder.py — Assembles DB data + profile into AI-ready context text.
 
-PHASE 4 IMPLEMENTATION PLAN:
-  - Query the DB for transactions within the requested date range
-  - Query bills table for all active recurring obligations
-  - Query vehicles table for insurance / fuel context
-  - Read profile.txt for the user's financial DNA
-  - Assemble everything into one structured, readable text block
-  - This context string is passed into both the categorizer and reporter
-    so the AI has full situational awareness in one shot
+This module is the bridge between SQLite and any AI call (report, chat agent).
+It runs targeted SQL queries, formats the results as structured text, and returns
+a single string that gets injected into the prompt.
+
+Planned sections:
+  1. User financial profile (profile.txt)
+  2. Spending summary for the period — totals by category
+  3. Active bills and fixed obligations (bills.json)
+  4. Vehicles (insurance, fuel avg)
+  5. Runway calculation: liquid balance ÷ avg monthly burn
+  6. Top single transactions (anomaly flags)
+
+This will be implemented as part of the FastAPI backend (api.py).
+The /api/summary and /api/context endpoints will call build_context().
 
 DEPENDENCIES: sqlite3 (Python stdlib — no install needed)
 """
@@ -34,12 +40,7 @@ def build_context(period_start: str, period_end: str) -> str:
     Returns:
         A multi-line formatted string ready to inject into an LLM prompt.
     """
-    # TODO (Phase 4): read profile.txt
-    # TODO (Phase 4): SELECT * FROM bills WHERE active = 1
-    # TODO (Phase 4): SELECT * FROM vehicles
-    # TODO (Phase 4): SELECT * FROM transactions WHERE date BETWEEN ? AND ?
-    # TODO (Phase 4): format each section with headers and tabulate data
-    raise NotImplementedError("context_builder.py — Phase 4 will implement this.")
+    raise NotImplementedError("context_builder — implemented in api.py (dashboard backend)")
 
 
 def get_transactions_for_period(period_start: str, period_end: str) -> list[dict]:
@@ -53,7 +54,6 @@ def get_transactions_for_period(period_start: str, period_end: str) -> list[dict
     Returns:
         List of transaction row dicts from the DB.
     """
-    # TODO (Phase 4): open DB_PATH, run parameterized SELECT, return rows as dicts
     raise NotImplementedError
 
 
@@ -64,5 +64,4 @@ def get_active_bills() -> list[dict]:
     Returns:
         List of bill row dicts from the DB.
     """
-    # TODO (Phase 4): SELECT * FROM bills WHERE active = 1
     raise NotImplementedError

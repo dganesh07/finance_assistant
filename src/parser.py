@@ -15,6 +15,7 @@ Run standalone test:
 import argparse
 import csv
 import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -31,7 +32,7 @@ from rich.table import Table
 
 # Allow running as a script from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import DB_PATH, STATEMENTS_DIR
+from config import CORRECTIONS_FILE, DB_PATH, STATEMENTS_DIR
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -403,6 +404,11 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
         # Balance column — used only to detect when its value bleeds into wds/deps
         bals  = [d.strip() for d in (row[bal_idx].split("\n") if bal_idx is not None else [""])]
 
+        # Capture pre-pad counts for split-column merge detection below.
+        _n_wd_vals  = sum(1 for x in wds  if re.sub(r"[$, ]", "", x))
+        _n_dep_vals = sum(1 for x in deps if re.sub(r"[$, ]", "", x))
+        _bals_pre_pad = bals.copy()
+
         # Base n only on descriptions and dates — NOT wds/deps.
         # The last row on each TD page has extra amount values that are
         # running page totals (TD statement artifact), not real sub-entries.
@@ -422,6 +428,42 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
         wds   = _pad(wds,   n)
         deps  = _pad(deps,  n)
         bals  = _pad(bals,  n)
+
+        # ── Split-column merge: reorder amounts to match descriptions ──────────
+        # When n=2 with exactly 1 withdrawal AND 1 deposit (no \n in either
+        # amount column), pdfplumber merged two opposite-type transactions into
+        # one PDF row.  After padding, both amounts land in sub-entry 0, which
+        # causes the split_wd_carry path below to assume credit-first — correct
+        # when the balance column has 2 values to confirm it, but wrong when
+        # only 1 balance value is available (debit was actually first).
+        #
+        # Strategy:
+        #   2 balance values → use delta to determine order:
+        #     b[1] - b[0] < 0  →  desc[1] is a debit  →  credit-first
+        #     b[1] - b[0] > 0  →  desc[1] is a credit →  debit-first
+        #   1 balance value   →  default to debit-first
+        #     (desc[0] owns the withdrawal column, desc[1] owns the deposit)
+        #
+        # After reordering, each sub-entry sees at most one non-zero amount
+        # so split_wd_carry is never triggered for these rows.
+        if n == 2 and _n_wd_vals == 1 and _n_dep_vals == 1:
+            _bv = []
+            for _b in _bals_pre_pad:
+                _bc = re.sub(r"[$, ]", "", _b)
+                if _bc:
+                    try:
+                        _bv.append(float(_bc))
+                    except ValueError:
+                        pass
+            _credit_first = len(_bv) >= 2 and (_bv[1] - _bv[0]) < 0
+            if _credit_first:
+                # desc[0] → deposit (credit), desc[1] → withdrawal (debit)
+                wds  = ["", wds[0]]
+                deps = [deps[0], ""]
+            else:
+                # desc[0] → withdrawal (debit), desc[1] → deposit (credit)
+                wds  = [wds[0], ""]
+                deps = ["", deps[0]]
 
         # dep_carry: when pdfplumber merges a fee row (e.g. MONTHLYACCOUNTFEE)
         # with its rebate row (ACCTFEEREBATE), the fee summary box at the bottom
@@ -944,6 +986,34 @@ def precategorize(description: str) -> tuple[str, int]:
 
 # ── DB insertion ─────────────────────────────────────────────────────────────
 
+def _load_corrections_for_parser() -> dict:
+    """
+    Load corrections.json for use at import time.
+    Returns an empty dict if the file is missing or malformed.
+    Keys are pre-uppercased; meta keys (_comment etc.) are stripped.
+    """
+    try:
+        raw = json.loads(CORRECTIONS_FILE.read_text(encoding="utf-8"))
+        return {k.upper(): v for k, v in raw.items() if not k.startswith("_")}
+    except Exception:
+        return {}
+
+
+def _corrections_category(description: str, corrections: dict) -> Optional[tuple[str, int]]:
+    """
+    Return (category, confirmed=1) if any corrections key is a substring of
+    description (case-insensitive), else None.
+
+    Matches the same logic as the AI categorizer so that corrections applied
+    at import time and at categorize time are identical.
+    """
+    desc_upper = description.upper()
+    for key, override in corrections.items():
+        if key in desc_upper:
+            return override.get("category", "other"), 1
+    return None
+
+
 def insert_transactions(
     conn: sqlite3.Connection,
     rows: list[dict],
@@ -953,10 +1023,17 @@ def insert_transactions(
     """
     Insert normalised transaction rows into the DB.
 
+    Category resolution order (first match wins):
+      1. corrections.json  — user-defined rules, confirmed=1, no AI needed
+      2. precategorize()   — hardcoded regex rules for common patterns
+      3. 'unknown'         — AI categorizer will fill this in later
+
     Skips rows whose hash already exists (dedup).
     Returns counts: inserted, skipped, failed.
     """
     inserted = skipped = failed = 0
+    corrections = _load_corrections_for_parser()
+
     # Track how many times each (date, description, amount) combo has appeared
     # in this batch so that two legitimately identical transactions in the same
     # file (e.g. two same-amount charges from the same merchant on the same day)
@@ -978,7 +1055,13 @@ def insert_transactions(
                 skipped += 1
                 continue
 
-            category, confirmed = precategorize(row["description"])
+            # 1. corrections.json wins — instant, no LLM needed
+            corr = _corrections_category(row["description"], corrections)
+            if corr:
+                category, confirmed = corr
+            else:
+                # 2. hardcoded precategory rules
+                category, confirmed = precategorize(row["description"])
 
             conn.execute(
                 """
@@ -1120,6 +1203,58 @@ def verify_statement(file_path: Path, account: str) -> dict:
     return result
 
 
+# ── Post-parse sanity checks ─────────────────────────────────────────────────
+
+def _check_outliers(rows: list[dict]) -> list[dict]:
+    """
+    Flag transactions whose amount is suspiciously large relative to the rest
+    of the file.  This catches parser bugs where two amounts are merged into
+    one (e.g. a $62.99 withdrawal absorbing a $45,000 deposit due to a
+    split-column merge mis-detection).
+
+    Strategy:
+      • Collect all debit amounts.
+      • Compute median.  If median > 0, flag any debit > 10× median.
+      • Also unconditionally flag any single transaction ≥ $10,000 as a
+        "large transaction" note (not necessarily wrong, but worth a glance).
+
+    Returns a list of warning dicts:
+      {"description": str, "amount": float, "date": str, "reason": str}
+    """
+    warnings = []
+    debits = [r["amount"] for r in rows if r.get("type") == "debit" and r["amount"] > 0]
+    if not debits:
+        return warnings
+
+    sorted_debits = sorted(debits)
+    mid = len(sorted_debits) // 2
+    median = (
+        sorted_debits[mid]
+        if len(sorted_debits) % 2 == 1
+        else (sorted_debits[mid - 1] + sorted_debits[mid]) / 2
+    )
+    outlier_threshold = max(median * 10, 5_000)
+
+    for r in rows:
+        if r.get("type") != "debit":
+            continue
+        if r["amount"] >= outlier_threshold:
+            reason = (
+                f"${r['amount']:,.2f} is ≥ 10× the median debit "
+                f"(${median:,.2f}) — possible merge artifact"
+                if r["amount"] >= median * 10
+                else f"${r['amount']:,.2f} is a large transaction (≥ $5,000)"
+            )
+            warnings.append({
+                "description": r["description"],
+                "amount":      r["amount"],
+                "date":        r["date"],
+                "reason":      reason,
+            })
+
+    return warnings
+
+
 # ── Main entry point ─────────────────────────────────────────────────────────
 
 def parse_new_statements(
@@ -1171,7 +1306,72 @@ def parse_new_statements(
         else:
             continue
 
+        # ── Outlier check ───────────────────────────────────────────────
+        outlier_warnings = _check_outliers(rows)
+        if outlier_warnings:
+            console.print(
+                f"  [bold yellow]⚠ {len(outlier_warnings)} outlier amount(s) — "
+                f"possible merge artifact:[/bold yellow]"
+            )
+            for w in outlier_warnings:
+                console.print(
+                    f"    [yellow]•[/yellow] {w['date']}  "
+                    f"[white]{w['description'][:45]}[/white]  "
+                    f"[red]${w['amount']:,.2f}[/red]  [dim]{w['reason']}[/dim]"
+                )
+
         counts = insert_transactions(conn, rows, safe_filename, account)
+
+        # ── Balance reconciliation (chequing + creditcard) ───────────────
+        reconciliation = None
+        if suffix == ".pdf":
+            rec = verify_statement(file_path, account)
+            if account == "chequing" and rec["opening_balance"] is not None:
+                # Net = sum(credits) - sum(debits) should equal closing - opening
+                net_parsed = sum(
+                    r["amount"] * (1 if r["type"] == "credit" else -1) for r in rows
+                )
+                expected_net = (rec["closing_balance"] or 0) - rec["opening_balance"]
+                delta = round(abs(net_parsed - expected_net), 2)
+                ok = delta < 0.05
+                mark = "[green]✓[/green]" if ok else "[bold red]✗[/bold red]"
+                console.print(
+                    f"  {mark} Balance check:  "
+                    f"parsed net [cyan]${net_parsed:+,.2f}[/cyan]  "
+                    f"statement net [cyan]${expected_net:+,.2f}[/cyan]"
+                    + ("" if ok else f"  [red]Δ ${delta:,.2f} — investigate[/red]")
+                )
+                reconciliation = {
+                    "opening":     rec["opening_balance"],
+                    "closing":     rec["closing_balance"],
+                    "parsed_net":  round(net_parsed, 2),
+                    "expected_net": round(expected_net, 2),
+                    "delta":       delta,
+                    "ok":          ok,
+                }
+            elif account == "creditcard" and rec["expected_charges"] is not None:
+                total_debits  = sum(r["amount"] for r in rows if r["type"] == "debit")
+                total_credits = sum(r["amount"] for r in rows if r["type"] == "credit")
+                delta_charges  = round(abs(total_debits  - rec["expected_charges"]),  2)
+                delta_payments = round(abs(total_credits - (rec["expected_payments"] or 0)), 2)
+                ok = delta_charges < 0.05 and delta_payments < 0.05
+                mark = "[green]✓[/green]" if ok else "[bold red]✗[/bold red]"
+                console.print(
+                    f"  {mark} CC check:  "
+                    f"charges [cyan]${total_debits:,.2f}[/cyan] / [dim]expected ${rec['expected_charges']:,.2f}[/dim]  "
+                    f"payments [cyan]${total_credits:,.2f}[/cyan] / [dim]expected ${rec['expected_payments'] or 0:,.2f}[/dim]"
+                    + ("" if ok else f"  [red]mismatch — investigate[/red]")
+                )
+                reconciliation = {
+                    "expected_charges":  rec["expected_charges"],
+                    "expected_payments": rec["expected_payments"],
+                    "parsed_charges":    round(total_debits, 2),
+                    "parsed_payments":   round(total_credits, 2),
+                    "delta_charges":     delta_charges,
+                    "delta_payments":    delta_payments,
+                    "ok":                ok,
+                }
+
         results.append({
             "file": safe_filename,
             "parsed":   len(rows),
@@ -1180,6 +1380,8 @@ def parse_new_statements(
             "failed":   counts["failed"],
             "dropped":  parse_dropped,
             "status": "imported",
+            "outlier_warnings": outlier_warnings,
+            "reconciliation":   reconciliation,
         })
 
     conn.close()
