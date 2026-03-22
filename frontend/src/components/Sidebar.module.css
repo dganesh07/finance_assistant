@@ -1,0 +1,100 @@
+.sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 24px 0;
+}
+
+/* Brand */
+.brand {
+  padding: 0 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.brandMono {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+  letter-spacing: 1px;
+}
+.brandSub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+
+/* Nav */
+.nav {
+  flex: 1;
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.link, .linkActive {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  background: none;
+  color: var(--muted);
+  text-align: left;
+  width: 100%;
+  position: relative;
+}
+.linkActive {
+  background: var(--bg);
+  color: var(--text);
+}
+.link:hover { background: var(--bg); color: var(--subtle); }
+
+.icon {
+  font-size: 14px;
+  width: 16px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+/* Review badge */
+.badge {
+  margin-left: auto;
+  background: var(--amber-dim);
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+/* Footer */
+.footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.footerLine {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}

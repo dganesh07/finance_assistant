@@ -1,0 +1,87 @@
+.page    { display: flex; flex-direction: column; gap: 24px; }
+.loading { color: var(--muted); font-family: var(--font-mono); padding: 40px 0; }
+
+/* Header */
+.header  { display: flex; align-items: flex-start; justify-content: space-between; }
+.title   { font-family: var(--font-mono); font-size: 12px; color: var(--green); letter-spacing: 3px; text-transform: uppercase; }
+.subtitle{ color: var(--muted); font-size: 11px; font-family: var(--font-mono); margin-top: 2px; }
+
+/* Stat cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.cardLabel { font-size: 10px; font-family: var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.cardValue { font-size: 22px; font-family: var(--font-mono); font-weight: 600; }
+.cardSub   { font-size: 10px; color: var(--muted); margin-top: 4px; font-family: var(--font-mono); }
+
+/* Body: chart + bills */
+.body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 12px;
+  align-items: start;
+}
+
+/* Generic panel */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.panelTitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panelMeta { color: var(--subtle); margin-left: auto; }
+.empty     { color: var(--muted); font-size: 12px; }
+
+/* Chart tooltip */
+.tooltip      { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.tooltipLabel { font-family: var(--font-mono); font-size: 11px; color: var(--subtle); margin-bottom: 2px; }
+.tooltipValue { font-size: 15px; font-weight: 600; color: var(--text); }
+.tooltipSub   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Bills */
+.billRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.billRow:last-of-type { border-bottom: none; }
+.billName   { flex: 1; color: var(--text); }
+.billMeta   { color: var(--muted); font-size: 10px; font-family: var(--font-mono); }
+.billAmount { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text); min-width: 60px; text-align: right; }
+.badge      { font-size: 9px; font-family: var(--font-mono); letter-spacing: 1px; padding: 2px 7px; border-radius: 3px; }
+.manualAlert{
+  margin-top: 14px;
+  padding: 8px 12px;
+  background: var(--amber-dim);
+  border-radius: var(--radius);
+  color: var(--amber);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 900px) {
+  .cards { grid-template-columns: repeat(2, 1fr); }
+  .body  { grid-template-columns: 1fr; }
+}

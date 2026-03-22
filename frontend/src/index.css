@@ -1,0 +1,68 @@
+/* ── CSS variables ────────────────────────────────────────────────────────── */
+:root {
+  --bg:       #0d0f14;
+  --surface:  #161920;
+  --surface2: #1c2029;
+  --border:   #252a35;
+  --border2:  #2e3444;
+
+  --text:     #e2e8f0;
+  --muted:    #64748b;
+  --subtle:   #94a3b8;
+
+  --green:    #4ade80;
+  --green-dim:#1a3a1a;
+  --blue:     #60a5fa;
+  --blue-dim: #1a2235;
+  --amber:    #f59e0b;
+  --amber-dim:#292318;
+  --red:      #f87171;
+  --red-dim:  #2a1a1a;
+  --purple:   #c084fc;
+
+  --radius:   6px;
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+}
+
+/* ── Reset ────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+button {
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  border: none;
+  border-radius: var(--radius);
+  transition: opacity 0.15s, background 0.15s;
+}
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+select, input {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  padding: 6px 10px;
+}
+select:focus, input:focus { border-color: var(--blue); }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }

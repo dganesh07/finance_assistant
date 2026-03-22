@@ -1,0 +1,155 @@
+.page     { display: flex; flex-direction: column; gap: 20px; }
+.loading  { color: var(--muted); font-family: var(--font-mono); padding: 40px 0; }
+
+.header   { display: flex; align-items: flex-start; justify-content: space-between; }
+.title    { font-family: var(--font-mono); font-size: 12px; color: var(--blue); letter-spacing: 3px; text-transform: uppercase; }
+.subtitle { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+.actions  { display: flex; gap: 10px; align-items: center; }
+
+.btnPrimary {
+  background: var(--green);
+  color: #0d0f14;
+  font-weight: 600;
+  padding: 8px 16px;
+}
+.btnPrimary:hover:not(:disabled) { opacity: 0.85; }
+
+.btnSecondary {
+  background: var(--surface2);
+  color: var(--subtle);
+  border: 1px solid var(--border);
+  padding: 8px 16px;
+}
+.btnSecondary:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+
+/* Step button — numbered workflow steps */
+.btnStep {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border: 1px solid var(--blue);
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.btnStep:hover:not(:disabled) { background: var(--blue); color: #0d0f14; }
+
+/* Status banner */
+.banner {
+  padding: 10px 16px;
+  border: 1px solid;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface);
+}
+
+/* Tabs */
+.tabs     { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab, .tabActive {
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: none;
+  color: var(--muted);
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tabActive { color: var(--blue); border-bottom-color: var(--blue); }
+.tab:hover { color: var(--subtle); }
+.tabBadge {
+  background: var(--amber-dim);
+  color: var(--amber);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+/* Table */
+.tableWrap { overflow-x: auto; }
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.row:hover td { background: var(--surface); }
+.row:last-child td { border-bottom: none; }
+
+.date    { font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.desc    { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+.right   { text-align: right; }
+.center  { text-align: center; }
+
+.empty {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 40px 0;
+  text-align: center;
+}
+
+/* Category select */
+.select, .selectChanged, .selectUnpicked {
+  width: 140px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.selectChanged  { border-color: var(--amber); color: var(--amber); }
+.selectUnpicked { border-color: var(--red);   color: var(--red);   }
+
+.catBadge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--surface2);
+  color: var(--subtle);
+}
+
+/* Save-as-rule toggle */
+.ruleToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ruleToggle input { accent-color: var(--amber); cursor: pointer; }
+
+/* Confirm button */
+.confirmBtn {
+  background: var(--green-dim);
+  color: var(--green);
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  border-radius: var(--radius);
+}
+.confirmBtn:hover { background: var(--green); color: #0d0f14; }
