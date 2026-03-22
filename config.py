@@ -11,7 +11,7 @@ from pathlib import Path
 BASE_DIR         = Path(__file__).parent
 DB_PATH          = BASE_DIR / "finance.db"
 STATEMENTS_DIR   = BASE_DIR / "data" / "statements"
-BILLS_FILE       = BASE_DIR / "bills.json"
+BILLS_FILE       = BASE_DIR / "bills.local.json"
 CORRECTIONS_FILE = BASE_DIR / "data" / "corrections.json"
 PROFILE_FILE     = BASE_DIR / "profile.txt"
 SCHEMA_FILE      = BASE_DIR / "db" / "schema.sql"

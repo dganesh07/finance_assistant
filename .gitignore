@@ -1,13 +1,15 @@
 # ── Personal Financial Data — NEVER COMMIT ────────────────────────────────────
 
+# Bills/subscriptions — real personal data, keep local only
+bills.local.json
+
 # SQLite database (your actual transaction data)
 finance.db
 finance.db-shm
 finance.db-wal
 
-# Bank statement PDFs and CSVs — keep the folder placeholder only
-data/statements/*
-!data/statements/.gitkeep
+# Entire data folder — personal financial data, keep local only
+data/
 
 # Your personal financial profile — fill in locally, use profile.example.txt as template
 profile.txt
