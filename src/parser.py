@@ -958,11 +958,6 @@ _PRECATEGORY_RULES: list[tuple[re.Pattern, str, int]] = [
     # ── Income ────────────────────────────────────────────────────────────────
     (re.compile(r"PAYROLL|DIRECT\s*DEP|DIRECT\s*DEPOSIT", re.IGNORECASE), "income", 1),
 
-    # ── Bills ─────────────────────────────────────────────────────────────────
-    (re.compile(r"BCHYDRO|BC\s*HYDRO", re.IGNORECASE), "bills_utilities", 1),
-    (re.compile(r"ENMAX|HYDRO\s*ONE|TORONTO\s*HYDRO|ENBRIDGE", re.IGNORECASE), "bills_utilities", 1),
-    (re.compile(r"ROGERS|BELL\s*CANADA|TELUS|KOODO|FIDO|VIRGIN\s*MOBILE", re.IGNORECASE), "bills_utilities", 1),
-
     # ── Bank fees (then rebated) ───────────────────────────────────────────────
     (re.compile(r"MONTHLYACCOUNTFEE|MONTHLY\s*ACCOUNT\s*FEE", re.IGNORECASE), "fees", 1),
     (re.compile(r"ACCTFEEREBATE|ACCOUNT\s*FEE\s*REBATE", re.IGNORECASE), "fees", 1),

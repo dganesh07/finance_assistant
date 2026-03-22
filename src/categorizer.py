@@ -23,7 +23,7 @@ import json
 
 import ollama
 
-from config import CATEGORIES, CORRECTIONS_FILE, OLLAMA_MODEL, PROFILE_FILE
+from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, OLLAMA_MODEL, PROFILE_FILE
 
 BATCH_SIZE = 20  # transactions per LLM call
 
@@ -42,6 +42,31 @@ def _load_corrections() -> dict:
         return {k: v for k, v in raw.items() if not k.startswith("_")}
     except FileNotFoundError:
         return {}
+
+
+def _load_bill_rules() -> dict:
+    """
+    Load bills.local.json and extract match_keyword → category rules.
+    Only includes bills with a non-empty match_keyword and valid category.
+    Lower priority than corrections.json — corrections always win on conflict.
+    """
+    try:
+        bills = json.loads(BILLS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+    rules = {}
+    for bill in bills:
+        keyword  = (bill.get("match_keyword") or "").strip()
+        category = (bill.get("category") or "").strip()
+        if keyword and category in CATEGORIES:
+            key = keyword.upper()
+            if key not in rules:  # first bill with this keyword wins
+                rules[key] = {
+                    "category":    category,
+                    "subcategory": bill.get("subcategory") or None,
+                }
+    return rules
 
 
 def _apply_corrections(transactions: list[dict], corrections: dict) -> tuple[list[dict], int]:
@@ -198,12 +223,14 @@ def categorize_transactions(transactions: list[dict]) -> list[dict]:
     if not transactions:
         return transactions
 
-    corrections = _load_corrections()
-    profile     = _load_profile()
-    results     = [dict(t) for t in transactions]  # copy — don't mutate input
+    bill_rules   = _load_bill_rules()
+    corrections  = _load_corrections()
+    merged_rules = {**bill_rules, **corrections}  # corrections win on conflict
+    profile      = _load_profile()
+    results      = [dict(t) for t in transactions]  # copy — don't mutate input
 
-    # Step 1 — apply user corrections (instant, no LLM)
-    results, corrected_count = _apply_corrections(results, corrections)
+    # Step 1 — apply bill rules + corrections (instant, no LLM)
+    results, corrected_count = _apply_corrections(results, merged_rules)
 
     # Step 2 — send only uncategorized transactions to Ollama
     # Build an index map so we can write results back at the right position

@@ -19,37 +19,56 @@ import styles from './Review.module.css'
  */
 
 export default function Review({ onConfirm }) {
-  const [tab,          setTab]          = useState('needs_review')
-  const [transactions, setTransactions] = useState([])
-  const [categories,   setCategories]   = useState([])
-  const [localCats,    setLocalCats]    = useState({}) // id → chosen category (pending save)
-  const [saveAsRule,   setSaveAsRule]   = useState({}) // id → bool (save as correction rule)
-  const [loading,      setLoading]      = useState(true)
-  const [jobStatus,    setJobStatus]    = useState(null) // null | 'running' | 'done' | 'error'
-  const [jobResult,    setJobResult]    = useState(null)
-  const [parseStatus,  setParseStatus]  = useState(null) // null | 'running' | 'done' | 'error'
-  const [parseResult,  setParseResult]  = useState(null)
-  const [corrStatus,   setCorrStatus]   = useState(null) // null | 'running' | 'done'
-  const [corrResult,   setCorrResult]   = useState(null)
+  const [tab,                setTab]                = useState('needs_review')
+  const [transactions,       setTransactions]       = useState([])
+  const [categories,         setCategories]         = useState([])
+  const [localCats,          setLocalCats]          = useState({}) // id → chosen category (pending save)
+  const [saveAsRule,         setSaveAsRule]          = useState({}) // id → bool (save as correction rule)
+  const [loading,            setLoading]            = useState(true)
+  const [jobStatus,          setJobStatus]          = useState(null) // null | 'running' | 'done' | 'error'
+  const [jobResult,          setJobResult]          = useState(null)
+  const [parseStatus,        setParseStatus]        = useState(null) // null | 'running' | 'done' | 'error'
+  const [parseResult,        setParseResult]        = useState(null)
+  const [corrStatus,         setCorrStatus]         = useState(null) // null | 'running' | 'done'
+  const [corrResult,         setCorrResult]         = useState(null)
+  const [lastImportFiles,    setLastImportFiles]    = useState([]) // source_files from last import
+  const [confirmedLocalCats, setConfirmedLocalCats] = useState({}) // id → category for confirmed tab edits
+  const [autoOpen,           setAutoOpen]           = useState(true) // collapsible open state
 
   const load = useCallback(() => {
     setLoading(true)
-    const txnPromise =
-      tab === 'needs_review'
-        ? api.getReviewTransactions()
-        : api.getTransactions({ confirmed: 1, limit: 200 }).then(r => r.transactions)
+
+    let txnPromise
+    if (tab === 'needs_review') {
+      txnPromise = api.getReviewTransactions()
+    } else if (lastImportFiles.length > 0) {
+      txnPromise = api.getTransactions({ confirmed: 1, source_file: lastImportFiles, limit: 500 })
+        .then(r => r.transactions)
+    } else {
+      // No session import yet — fall back to the most recent batch from DB
+      txnPromise = api.getSourceFiles().then(sourceFiles => {
+        if (!sourceFiles.length) return []
+        const latestDay = sourceFiles[0].latest.split('T')[0]
+        const recentFiles = sourceFiles
+          .filter(f => f.latest.startsWith(latestDay))
+          .map(f => f.source_file)
+        setLastImportFiles(recentFiles)
+        return api.getTransactions({ confirmed: 1, source_file: recentFiles, limit: 500 })
+          .then(r => r.transactions)
+      })
+    }
 
     Promise.all([txnPromise, api.getCategories()])
       .then(([txns, cats]) => {
         setTransactions(txns)
         setCategories(cats)
-        // Seed localCats from current AI suggestions
         const seed = {}
         txns.forEach(t => { seed[t.id] = t.category ?? 'other' })
-        setLocalCats(seed)
+        if (tab === 'confirmed') setConfirmedLocalCats(seed)
+        else setLocalCats(seed)
       })
       .finally(() => setLoading(false))
-  }, [tab])
+  }, [tab, lastImportFiles])
 
   useEffect(() => { load() }, [load])
 
@@ -98,8 +117,10 @@ export default function Review({ onConfirm }) {
       const result = await api.parseStatements()
       setParseResult(result)
       setParseStatus('done')
-      load() // refresh table — new rows are now in DB
-      onConfirm?.() // refresh sidebar badge
+      const importedFiles = result.files.filter(f => f.inserted > 0).map(f => f.file)
+      if (importedFiles.length > 0) setLastImportFiles(importedFiles)
+      load()
+      onConfirm?.()
     } catch (e) {
       setParseStatus('error')
       setParseResult({ error: e.message })
@@ -137,6 +158,14 @@ export default function Review({ onConfirm }) {
         setJobResult(job)
       }
     }, 1500)
+  }
+
+  // ── Save an override on an auto-confirmed row ───────────────────────────────
+  const saveConfirmedEdit = async (txn) => {
+    const newCat = confirmedLocalCats[txn.id]
+    await api.updateTransaction(txn.id, { category: newCat, confirmed: 1 })
+    setTransactions(prev => prev.map(t => t.id === txn.id ? { ...t, category: newCat } : t))
+    setConfirmedLocalCats(p => ({ ...p, [txn.id]: newCat }))
   }
 
   const pending = transactions.filter(t => !t.confirmed)
@@ -306,8 +335,17 @@ export default function Review({ onConfirm }) {
         </div>
       )}
       {jobStatus === 'done' && jobResult && (
-        <div className={styles.banner} style={{ borderColor: 'var(--green)', color: 'var(--green)' }}>
-          AI done — {jobResult.categorized}/{jobResult.processed} transactions categorized.
+        <div
+          className={styles.banner}
+          style={{
+            borderColor: jobResult.processed === 0 ? 'var(--border)' : 'var(--green)',
+            color:       jobResult.processed === 0 ? 'var(--muted)' : 'var(--green)',
+          }}
+        >
+          {jobResult.processed === 0
+            ? 'No unknowns left — AI had nothing to do. Fix wrong categories in the dropdown above.'
+            : `AI done — ${jobResult.categorized}/${jobResult.processed} transactions categorized.`
+          }
         </div>
       )}
       {jobStatus === 'error' && (

@@ -26,9 +26,9 @@ import json
 import sqlite3
 import uuid
 from datetime import date, timedelta
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -165,7 +165,7 @@ def get_review_transactions():
     conn = get_conn()
     rows = conn.execute("""
         SELECT id, date, description, amount, type, account,
-               category, subcategory, confirmed, notes
+               category, subcategory, confirmed, source_file, notes
         FROM transactions
         WHERE confirmed = 0
         ORDER BY date DESC, id DESC
@@ -178,13 +178,14 @@ def get_review_transactions():
 
 @app.get("/api/transactions")
 def get_transactions(
-    category:  Optional[str] = None,
-    confirmed: Optional[int] = None,
-    search:    Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to:   Optional[str] = None,
-    limit:     int = 100,
-    offset:    int = 0,
+    category:    Optional[str] = None,
+    confirmed:   Optional[int] = None,
+    search:      Optional[str] = None,
+    date_from:   Optional[str] = None,
+    date_to:     Optional[str] = None,
+    source_file: Optional[List[str]] = Query(default=None),
+    limit:       int = 100,
+    offset:      int = 0,
 ):
     conn = get_conn()
 
@@ -205,12 +206,16 @@ def get_transactions(
     if date_to:
         clauses.append("date <= ?")
         params.append(date_to)
+    if source_file:
+        placeholders = ",".join("?" * len(source_file))
+        clauses.append(f"source_file IN ({placeholders})")
+        params.extend(source_file)
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
     rows = conn.execute(
         f"SELECT id, date, description, amount, type, account, "
-        f"category, subcategory, confirmed, notes "
+        f"category, subcategory, confirmed, source_file, notes "
         f"FROM transactions {where} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?",
         params + [limit, offset],
     ).fetchall()
@@ -337,7 +342,7 @@ def apply_corrections_endpoint():
     Use this after saving new rules in the Review UI so newly-added corrections
     are stamped across all existing unconfirmed transactions instantly.
     """
-    from src.categorizer import _load_corrections, _apply_corrections
+    from src.categorizer import _load_corrections, _load_bill_rules, _apply_corrections
 
     conn     = get_conn()
     rows     = conn.execute("""
@@ -350,9 +355,11 @@ def apply_corrections_endpoint():
         conn.close()
         return {"applied": 0, "remaining_unknown": 0}
 
-    corrections = _load_corrections()
-    txns        = [dict(r) for r in rows]
-    stamped, applied = _apply_corrections(txns, corrections)
+    bill_rules   = _load_bill_rules()
+    corrections  = _load_corrections()
+    merged_rules = {**bill_rules, **corrections}  # corrections win on conflict
+    txns         = [dict(r) for r in rows]
+    stamped, applied = _apply_corrections(txns, merged_rules)
 
     for result in stamped:
         if result.get("category") not in (None, "unknown", ""):
@@ -377,6 +384,24 @@ def get_job(job_id: str):
     if job_id not in _jobs:
         raise HTTPException(404, "Job not found")
     return _jobs[job_id]
+
+
+# ── GET /api/source-files ──────────────────────────────────────────────────────
+
+@app.get("/api/source-files")
+def get_source_files():
+    """Distinct source files in the DB, ordered by most recently imported."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT source_file, MAX(created_at) AS latest, COUNT(*) AS count
+        FROM transactions
+        WHERE source_file IS NOT NULL
+        GROUP BY source_file
+        ORDER BY latest DESC
+        LIMIT 20
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ── GET /api/statements ────────────────────────────────────────────────────────

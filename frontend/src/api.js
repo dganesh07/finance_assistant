@@ -36,10 +36,14 @@ export const api = {
   // Transactions
   getReviewTransactions: () => get('/api/transactions/review'),
   getTransactions: (params = {}) => {
-    const qs = new URLSearchParams(
-      Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))
-    ).toString()
-    return get(`/api/transactions${qs ? '?' + qs : ''}`)
+    const qs = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => {
+      if (v == null || v === '') return
+      if (Array.isArray(v)) v.forEach(item => qs.append(k, item))
+      else qs.append(k, v)
+    })
+    const str = qs.toString()
+    return get(`/api/transactions${str ? '?' + str : ''}`)
   },
 
   // Update a single transaction (category, confirmed, notes)
@@ -58,6 +62,7 @@ export const api = {
   // Statement import
   listStatements:   () => get('/api/statements'),
   parseStatements:  () => post('/api/parse-statements', {}),
+  getSourceFiles:   () => get('/api/source-files'),
 
   // Correction rules
   getCorrections:    () => get('/api/corrections'),
