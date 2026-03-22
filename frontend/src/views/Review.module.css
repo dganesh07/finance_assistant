@@ -139,6 +139,44 @@
 }
 .ruleToggle input { accent-color: var(--amber); cursor: pointer; }
 
+/* Import meta + collapsible */
+.importMeta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0 12px;
+}
+.fileName {
+  background: var(--surface2);
+  color: var(--subtle);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.collapsibleHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--subtle);
+  padding: 10px 0;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.collapsibleHeader:hover { color: var(--text); }
+.collapsibleCount {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 /* Confirm button */
 .confirmBtn {
   background: var(--green-dim);

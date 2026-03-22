@@ -374,13 +374,23 @@ export default function Review({ onConfirm }) {
       </div>
 
       {/* ── Table ── */}
-      {loading ? (
+      {tab === 'confirmed' ? (
+        <AutoConfirmedSection
+          transactions={transactions}
+          categories={categories}
+          localCats={confirmedLocalCats}
+          onCatChange={(id, cat) => setConfirmedLocalCats(p => ({ ...p, [id]: cat }))}
+          onSave={saveConfirmedEdit}
+          lastImportFiles={lastImportFiles}
+          autoOpen={autoOpen}
+          onToggle={() => setAutoOpen(p => !p)}
+          loading={loading}
+        />
+      ) : loading ? (
         <div className={styles.empty}>Loading…</div>
       ) : transactions.length === 0 ? (
         <div className={styles.empty}>
-          {tab === 'needs_review'
-            ? '✓ Nothing to review — run the categorizer or import a statement.'
-            : 'No confirmed transactions yet.'}
+          ✓ Nothing to review — run the categorizer or import a statement.
         </div>
       ) : (
         <div className={styles.tableWrap}>
@@ -392,8 +402,7 @@ export default function Review({ onConfirm }) {
                 <th className={styles.right}>Amount</th>
                 <th>Account</th>
                 <th>Category</th>
-                {tab === 'needs_review' && <th className={styles.center}>Confirm</th>}
-                {tab === 'confirmed'    && <th className={styles.center}>Status</th>}
+                <th className={styles.center}>Confirm</th>
               </tr>
             </thead>
             <tbody>
@@ -407,7 +416,6 @@ export default function Review({ onConfirm }) {
                   saveAsRule={saveAsRule[txn.id] ?? false}
                   onSaveAsRuleChange={v => setSaveAsRule(p => ({ ...p, [txn.id]: v }))}
                   onConfirm={() => confirmOne(txn)}
-                  showConfirm={tab === 'needs_review'}
                 />
               ))}
             </tbody>
@@ -418,18 +426,15 @@ export default function Review({ onConfirm }) {
   )
 }
 
-// ── Single row ─────────────────────────────────────────────────────────────────
+// ── Single row (needs review) ───────────────────────────────────────────────────
 
-function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveAsRuleChange, onConfirm, showConfirm }) {
+function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveAsRuleChange, onConfirm }) {
   const isDebit    = txn.type === 'debit'
   const amtColor   = isDebit ? 'var(--red)' : 'var(--green)'
   const sign       = isDebit ? '-' : '+'
   const isUnpicked = !localCat || localCat === 'unknown'
-  // amber border when user picked something different from the DB value
   const changed    = !isUnpicked && localCat !== txn.category
-  // AI had a real guess if DB value is not "unknown"
   const aiHasGuess = txn.category && txn.category !== 'unknown'
-  // Show pin toggle whenever a real category is selected
   const ruleLabel  = isUnpicked ? null
     : (changed || !aiHasGuess) ? 'save as rule'
     : 'pin AI guess as rule'
@@ -443,49 +448,111 @@ function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveA
       </td>
       <td className={styles.account}>{txn.account}</td>
       <td>
-        {showConfirm ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <select
-              value={isUnpicked ? '' : localCat}
-              onChange={e => onCatChange(e.target.value)}
-              className={changed ? styles.selectChanged : isUnpicked ? styles.selectUnpicked : styles.select}
-            >
-              {/* Sentinel shown when no category is chosen yet */}
-              {isUnpicked && (
-                <option value="" disabled>— pick a category —</option>
-              )}
-              {categories.map(c => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-            {/* Pin toggle: visible when there's a real category to save as a rule */}
-            {ruleLabel && (
-              <label className={styles.ruleToggle}>
-                <input
-                  type="checkbox"
-                  checked={saveAsRule}
-                  onChange={e => onSaveAsRuleChange(e.target.checked)}
-                />
-                {ruleLabel}
-              </label>
-            )}
-          </div>
-        ) : (
-          <span className={styles.catBadge}>{txn.category}</span>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <select
+            value={isUnpicked ? '' : localCat}
+            onChange={e => onCatChange(e.target.value)}
+            className={changed ? styles.selectChanged : isUnpicked ? styles.selectUnpicked : styles.select}
+          >
+            {isUnpicked && <option value="" disabled>— pick a category —</option>}
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          {ruleLabel && (
+            <label className={styles.ruleToggle}>
+              <input
+                type="checkbox"
+                checked={saveAsRule}
+                onChange={e => onSaveAsRuleChange(e.target.checked)}
+              />
+              {ruleLabel}
+            </label>
+          )}
+        </div>
       </td>
-      {showConfirm && (
-        <td className={styles.center}>
-          <button className={styles.confirmBtn} onClick={onConfirm} title="Confirm this category">
-            ✓
-          </button>
-        </td>
-      )}
-      {!showConfirm && (
-        <td className={styles.center}>
-          <span style={{ color: 'var(--green)', fontSize: 12 }}>✓</span>
-        </td>
-      )}
+      <td className={styles.center}>
+        <button className={styles.confirmBtn} onClick={onConfirm} title="Confirm this category">
+          ✓
+        </button>
+      </td>
     </tr>
+  )
+}
+
+// ── Auto-confirmed section (confirmed tab) ─────────────────────────────────────
+
+function AutoConfirmedSection({ transactions, categories, localCats, onCatChange, onSave, lastImportFiles, autoOpen, onToggle, loading }) {
+  if (loading) return <div className={styles.empty}>Loading…</div>
+
+  return (
+    <div>
+      {lastImportFiles.length > 0 && (
+        <div className={styles.importMeta}>
+          <span style={{ color: 'var(--muted)' }}>Last import:</span>
+          {lastImportFiles.map(f => (
+            <span key={f} className={styles.fileName}>{f}</span>
+          ))}
+        </div>
+      )}
+
+      <div className={styles.collapsibleHeader} onClick={onToggle}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{autoOpen ? '▾' : '▸'}</span>
+        <span>Auto-confirmed by rules</span>
+        <span className={styles.collapsibleCount}>({transactions.length})</span>
+      </div>
+
+      {autoOpen && (
+        transactions.length === 0 ? (
+          <div className={styles.empty}>No confirmed transactions from this import.</div>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th className={styles.right}>Amount</th>
+                  <th>Account</th>
+                  <th>Category</th>
+                  <th className={styles.center}>Override</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map(txn => {
+                  const localCat = localCats[txn.id] ?? txn.category
+                  const changed  = localCat !== txn.category
+                  const isDebit  = txn.type === 'debit'
+                  return (
+                    <tr key={txn.id} className={styles.row}>
+                      <td className={styles.date}>{txn.date}</td>
+                      <td className={styles.desc} title={txn.description}>{txn.description}</td>
+                      <td className={styles.right} style={{ color: isDebit ? 'var(--red)' : 'var(--green)', fontFamily: 'var(--font-mono)' }}>
+                        {isDebit ? '-' : '+'}${txn.amount.toFixed(2)}
+                      </td>
+                      <td className={styles.account}>{txn.account}</td>
+                      <td>
+                        <select
+                          value={localCat}
+                          onChange={e => onCatChange(txn.id, e.target.value)}
+                          className={changed ? styles.selectChanged : styles.select}
+                        >
+                          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </td>
+                      <td className={styles.center}>
+                        {changed && (
+                          <button className={styles.confirmBtn} onClick={() => onSave(txn)} title="Save override">
+                            ✓
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
   )
 }
