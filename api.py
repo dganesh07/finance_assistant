@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, DB_PATH, STATEMENTS_DIR
 from src.categorizer import categorize_transactions
+from src.context_builder import build_context
 from src.parser import parse_new_statements
 
 app = FastAPI(title="Finance Agent API")
@@ -455,6 +456,18 @@ def parse_statements():
             for r in results
         ],
     }
+
+
+# ── GET /api/context ───────────────────────────────────────────────────────────
+
+@app.get("/api/context")
+def get_context():
+    """
+    Returns the full financial context block that will be fed to the AI report/chat agent.
+    Use this to inspect and verify what the AI sees before running a report.
+    """
+    text = build_context()
+    return {"context": text}
 
 
 # ── /api/corrections ───────────────────────────────────────────────────────────

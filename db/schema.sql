@@ -61,3 +61,32 @@ CREATE TABLE IF NOT EXISTS todo_items (
     done        INTEGER DEFAULT 0,
     created_at  TEXT    DEFAULT CURRENT_TIMESTAMP
 );
+
+-- account_balances: opening/closing balance captured from each statement PDF.
+-- The parser writes one row per account per statement month.
+-- Used by context_builder to compute spending runway (TD balance ÷ monthly burn).
+CREATE TABLE IF NOT EXISTS account_balances (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account         TEXT    NOT NULL,          -- 'chequing', 'creditcard', 'savings', 'loc'
+    statement_month TEXT    NOT NULL,          -- 'YYYY-MM' — the statement period end month
+    opening_balance REAL,                      -- balance at the start of the statement period
+    closing_balance REAL,                      -- balance at the end of the statement period
+    source_file     TEXT,                      -- which statement filename this was read from
+    captured_at     TEXT    DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account, statement_month)           -- one balance row per account per month; re-parse updates it
+);
+
+-- spending_periods: one row per calendar month.
+-- is_baseline = 0 → exclude from burn rate / average calculations (e.g. setup period).
+-- is_complete = 1 → a full statement has been imported for this month.
+-- Pre-populated by init_db for known setup months; auto-extended by parser as new statements arrive.
+CREATE TABLE IF NOT EXISTS spending_periods (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_label TEXT    NOT NULL UNIQUE,      -- 'YYYY-MM', e.g. '2026-01'
+    year         INTEGER NOT NULL,
+    month        INTEGER NOT NULL,             -- 1–12
+    is_baseline  INTEGER DEFAULT 1,            -- 0 = non-representative month, skip in baselines
+    is_complete  INTEGER DEFAULT 0,            -- 1 = full statement imported
+    notes        TEXT,
+    UNIQUE(year, month)
+);

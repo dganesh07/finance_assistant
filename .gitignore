@@ -1,18 +1,24 @@
 # ── Personal Financial Data — NEVER COMMIT ────────────────────────────────────
+# Rule: anything with real names, amounts, account numbers, or personal
+# spending patterns stays local. If in doubt, add it here.
 
-# Bills/subscriptions — real personal data, keep local only
-bills.local.json
-
-# SQLite database (your actual transaction data)
+# SQLite database — your actual transaction data
 finance.db
 finance.db-shm
 finance.db-wal
 
-# Entire data folder — personal financial data, keep local only
+# Entire data/ folder — statements, corrections.json, any personal JSON
 data/
 
-# Your personal financial profile — fill in locally, use profile.example.txt as template
+# Your personal financial profile (use profile.example.txt as the committed template)
 profile.txt
+
+# External accounts snapshot — EQ Bank, GICs, TFSA balances (use financial_snapshot.example.json as template)
+financial_snapshot.json
+
+# Bills — real personal amounts and due dates
+bills.local.json
+*.local.json        # catch-all for any future *.local.json config files
 
 # ── Python ────────────────────────────────────────────────────────────────────
 .venv/

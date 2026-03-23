@@ -95,9 +95,10 @@ export default function Dashboard() {
   const fmt = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
   const netColor = summary.net >= 0 ? 'var(--green)' : 'var(--red)'
 
-  // Exclude income/transfer from the chart
+  // Exclude non-spending categories from the chart.
+  // investment = GIC / savings transfers — real money moves but not discretionary spend.
   const chartData = (summary.by_category ?? [])
-    .filter(c => !['income', 'transfer', 'fees'].includes(c.category))
+    .filter(c => !['income', 'transfer', 'fees', 'investment'].includes(c.category))
     .sort((a, b) => b.total - a.total)
 
   const totalBills = bills.reduce((s, b) => s + b.amount, 0)

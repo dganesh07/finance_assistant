@@ -26,8 +26,8 @@ def initialize_db() -> None:
     schema.sql, and executes it as a script.  All statements use
     IF NOT EXISTS so this is idempotent.
 
-    Also runs any additive migrations (new columns) so existing DBs
-    stay in sync without losing data.
+    Also runs any additive migrations (new columns) and seeds fixed
+    reference data (setup-period months) on every call — all idempotent.
     """
     schema = SCHEMA_FILE.read_text()
     conn = sqlite3.connect(DB_PATH)
@@ -44,6 +44,9 @@ def initialize_db() -> None:
             conn.execute(sql)
         except Exception:
             pass  # column already exists
+
+    # Note: burn rate baseline cutoff is configured in config.py (BURN_RATE_START),
+    # not here. init_db is pure infrastructure — no personal context belongs here.
 
     conn.commit()
     conn.close()

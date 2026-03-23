@@ -16,6 +16,14 @@ CORRECTIONS_FILE = BASE_DIR / "data" / "corrections.json"
 PROFILE_FILE     = BASE_DIR / "profile.txt"
 SCHEMA_FILE      = BASE_DIR / "db" / "schema.sql"
 
+# ── Burn rate baseline ─────────────────────────────────────────────────────────
+# Only months on or after this date are used to calculate average monthly spend
+# and runway.  Months before this are still in the DB and visible in charts —
+# they're just excluded from the burn rate average because they contain one-time
+# setup costs that don't reflect normal ongoing spending.
+# Change this if you have another unusual period in the future.
+BURN_RATE_START = "2026-01"   # YYYY-MM  — first month of normal spending
+
 # ── AI / Ollama ────────────────────────────────────────────────────────────────
 OLLAMA_MODEL    = "mistral:7b"   # swap to any model you have pulled
 OLLAMA_BASE_URL = "http://localhost:11434"

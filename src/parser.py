@@ -1077,6 +1077,82 @@ def insert_transactions(
     return {"inserted": inserted, "skipped": skipped, "failed": failed}
 
 
+# ── Account balance persistence ──────────────────────────────────────────────
+
+def save_account_balance(
+    conn: sqlite3.Connection,
+    account: str,
+    statement_month: str,
+    opening: Optional[float],
+    closing: Optional[float],
+    source_file: str,
+) -> None:
+    """
+    Upsert one row into account_balances for the given account + month.
+
+    Uses INSERT OR REPLACE so re-importing a statement refreshes the balance
+    rather than failing on the UNIQUE(account, statement_month) constraint.
+
+    Args:
+        account:         e.g. 'chequing', 'creditcard'
+        statement_month: 'YYYY-MM' derived from the last transaction date
+        opening:         opening balance from the statement (may be None for CC)
+        closing:         closing balance from the statement (may be None)
+        source_file:     statement filename for traceability
+    """
+    if opening is None and closing is None:
+        return  # nothing to save — statement didn't surface balance figures
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO account_balances
+            (account, statement_month, opening_balance, closing_balance, source_file)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (account, statement_month, opening, closing, source_file),
+    )
+    conn.commit()
+
+
+def upsert_spending_periods(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    """
+    Ensure every calendar month covered by these transaction rows exists in
+    spending_periods, and mark it as complete (is_complete = 1).
+
+    Uses INSERT OR IGNORE so that pre-seeded setup-period rows (is_baseline=0,
+    set by init_db) are never overwritten — only new months are inserted.
+    Then a separate UPDATE flips is_complete=1 for any month with transactions,
+    including the pre-seeded ones.
+
+    Args:
+        rows: normalised transaction dicts, each with a 'date' key (YYYY-MM-DD).
+    """
+    months_seen: set[str] = set()
+    for row in rows:
+        date_str = row.get("date", "")
+        if date_str and len(date_str) >= 7:
+            months_seen.add(date_str[:7])  # 'YYYY-MM'
+
+    for label in months_seen:
+        year, month = int(label[:4]), int(label[5:7])
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO spending_periods
+                (period_label, year, month, is_baseline, is_complete)
+            VALUES (?, ?, ?, 1, 1)
+            """,
+            (label, year, month),
+        )
+        # Always mark as complete — even for setup-period months that were
+        # pre-seeded with is_baseline=0 and is_complete=0.
+        conn.execute(
+            "UPDATE spending_periods SET is_complete = 1 WHERE period_label = ?",
+            (label,),
+        )
+
+    conn.commit()
+
+
 # ── Statement balance verification ───────────────────────────────────────────
 #
 # After parsing, we extract the summary totals printed on the statement itself
@@ -1366,6 +1442,22 @@ def parse_new_statements(
                     "delta_payments":    delta_payments,
                     "ok":                ok,
                 }
+
+        # ── Persist balance + spending periods ───────────────────────────
+        # Save the closing balance captured during reconciliation so
+        # context_builder can compute a spending runway without needing
+        # to re-open the PDF.
+        if reconciliation and rows:
+            last_date = max(r["date"] for r in rows if r.get("date"))
+            statement_month = last_date[:7]  # 'YYYY-MM'
+            opening = reconciliation.get("opening")
+            closing = reconciliation.get("closing") or reconciliation.get("expected_new_bal")
+            save_account_balance(conn, account, statement_month, opening, closing, safe_filename)
+
+        # Register every calendar month covered by this statement so
+        # context_builder can filter by period and flag incomplete months.
+        if rows:
+            upsert_spending_periods(conn, rows)
 
         results.append({
             "file": safe_filename,
