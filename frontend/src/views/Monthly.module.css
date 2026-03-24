@@ -1,0 +1,169 @@
+.page    { display: flex; flex-direction: column; gap: 24px; }
+.empty   { color: var(--muted); font-family: var(--font-mono); font-size: 12px; padding: 40px 0; text-align: center; }
+
+/* Header */
+.header   { display: flex; align-items: flex-start; justify-content: space-between; }
+.title    { font-family: var(--font-mono); font-size: 12px; color: var(--amber); letter-spacing: 3px; text-transform: uppercase; }
+.subtitle { color: var(--muted); font-size: 11px; font-family: var(--font-mono); margin-top: 2px; }
+
+/* Month summary cards */
+.cards {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.monthCard {
+  flex: 1;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.monthCardLatest {
+  border-color: var(--amber);
+}
+
+.monthCardTitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.monthCardRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.monthCardLabel {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.monthCardOut     { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--red); }
+.monthCardOneTime { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--amber); }
+.monthCardIn      { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--green); }
+.monthCardRefund  { font-family: var(--font-mono); font-size: 12px; color: var(--subtle); }
+.monthCardNet     { font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
+
+.monthCardDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* Panel */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+
+.panelTitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panelNote {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: var(--border);
+  text-transform: none;
+  font-weight: normal;
+}
+
+/* Category comparison table */
+.tableWrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.row:hover td { background: var(--surface2); }
+.row:last-child td { border-bottom: none; }
+
+.catCol   { text-align: left; min-width: 120px; }
+.amtCol   { text-align: right; min-width: 130px; }
+.deltaCol { text-align: right; min-width: 80px; }
+
+.catCell {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.amtCell  { text-align: right; }
+.amtValue { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+.amtCount { font-family: var(--font-mono); font-size: 9px; color: var(--muted); margin-left: 6px; }
+.amtNone  { color: var(--border); font-size: 11px; }
+
+.deltaCell  { text-align: right; }
+.deltaVal   { font-family: var(--font-mono); font-size: 11px; }
+.deltaNew   { font-family: var(--font-mono); font-size: 10px; color: var(--blue); }
+
+/* Total row */
+.totalRow td {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  padding-top: 12px;
+}
+
+.totalRow .catCell {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.totalVal {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .cards { flex-direction: column; }
+}
