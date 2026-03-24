@@ -2,7 +2,7 @@
 src/context_builder.py — Assembles DB data + profile + external snapshot into AI-ready text.
 
 This is pure data work — no LLM calls here. It reads from:
-  1. SQLite (transactions, account_balances, spending_periods, bills table)
+  1. SQLite (transactions, account_balances, spending_periods)
   2. profile.txt (user financial DNA — employment, goals, behavior notes)
   3. financial_snapshot.json (external accounts: EQ Bank, GICs, TFSA — manually updated)
   4. bills.local.json (recurring fixed obligations)
@@ -22,14 +22,14 @@ from pathlib import Path
 
 from config import BILLS_FILE, BURN_RATE_START, DB_PATH, PROFILE_FILE
 
-BASE_DIR = Path(__file__).parent.parent
+BASE_DIR      = Path(__file__).parent.parent
 SNAPSHOT_FILE = BASE_DIR / "financial_snapshot.json"
 
-# Categories excluded from "spending" totals — money movements, not discretionary spend
+# Categories excluded from spending totals — money movements, not discretionary spend
 _NON_SPEND = {"transfer", "fees", "investment", "income"}
 
-# Spending categories excluded from burn rate (non-representative or internal)
-_BURN_EXCLUDE = _NON_SPEND
+# SQL tuple form (used in NOT IN clauses)
+_NON_SPEND_SQL = "('transfer', 'fees', 'investment', 'income')"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -50,6 +50,23 @@ def _pct_change(old: float, new: float) -> str:
     delta = ((new - old) / old) * 100
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.0f}%"
+
+
+def _load_snapshot() -> dict:
+    """Load financial_snapshot.json once; return empty dict if missing or invalid."""
+    if not SNAPSHOT_FILE.exists():
+        return {}
+    try:
+        return json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _next_month(year: int, month: int) -> str:
+    """Return YYYY-MM-DD string for the first day of the month after (year, month)."""
+    if month == 12:
+        return f"{year + 1}-01-01"
+    return f"{year}-{month + 1:02d}-01"
 
 
 # ── Section builders ───────────────────────────────────────────────────────────
@@ -79,7 +96,6 @@ def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
     that month's total will still be understated. The fix is: import all statements
     before reading burn rate numbers.
     """
-    # 5 weeks ago — any month that ended before this is treated as likely complete
     cutoff = (date.today() - timedelta(weeks=5)).strftime("%Y-%m")
 
     rows = conn.execute("""
@@ -95,33 +111,31 @@ def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
 
 def _section_monthly_spending(conn: sqlite3.Connection) -> str:
     """
-    Monthly spending breakdown for baseline months only (on/after BURN_RATE_START).
-    Shows last 3 complete baseline months + current month-to-date.
+    Monthly spending breakdown for the last 3 complete baseline months + current MTD.
+    Earlier months (before BURN_RATE_START) are excluded from all calculations here.
     """
     baseline_months = _baseline_months(conn, limit=3)
 
     if not baseline_months:
         return (
             f"MONTHLY SPENDING\n─\n"
-            f"[No transactions found from {BURN_RATE_START} onwards yet]"
+            f"  [No complete months found from {BURN_RATE_START} onwards yet.\n"
+            f"   Import statements and wait until a full month has passed to see burn rate data.]"
         )
 
     lines = [
         f"MONTHLY SPENDING (from {BURN_RATE_START} onwards — earlier months excluded from burn rate)",
-             "─" * 60]
+        "─" * 60,
+    ]
 
     month_data: dict[str, dict] = {}
 
     for month in sorted(baseline_months):
-        month_start = f"{month}-01"
-        # Last day: compute next month then subtract
         y, m = map(int, month.split("-"))
-        if m == 12:
-            next_m = f"{y+1}-01-01"
-        else:
-            next_m = f"{y}-{m+1:02d}-01"
+        month_start = f"{month}-01"
+        next_m = _next_month(y, m)
 
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT category,
                    COALESCE(SUM(amount), 0) AS total,
                    COUNT(*) AS cnt
@@ -129,27 +143,27 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
             WHERE date >= ? AND date < ?
               AND type = 'debit'
               AND (is_one_time = 0 OR is_one_time IS NULL)
-              AND category NOT IN ('transfer', 'fees', 'investment')
+              AND category NOT IN {_NON_SPEND_SQL}
             GROUP BY category
             ORDER BY total DESC
         """, (month_start, next_m)).fetchall()
 
-        one_time_rows = conn.execute("""
+        one_time_rows = conn.execute(f"""
             SELECT description, category,
                    COALESCE(SUM(amount), 0) AS total
             FROM transactions
             WHERE date >= ? AND date < ?
               AND type = 'debit'
               AND is_one_time = 1
-              AND category NOT IN ('transfer', 'fees', 'investment')
+              AND category NOT IN {_NON_SPEND_SQL}
             GROUP BY description, category
             ORDER BY total DESC
         """, (month_start, next_m)).fetchall()
 
-        total_spend   = sum(r["total"] for r in rows)
+        total_spend    = sum(r["total"] for r in rows)
         one_time_total = sum(r["total"] for r in one_time_rows)
         month_data[month] = {
-            "total": total_spend,
+            "total":  total_spend,
             "by_cat": {r["category"]: r["total"] for r in rows},
         }
 
@@ -161,7 +175,7 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
             for r in one_time_rows:
                 lines.append(f"      ↳ {r['description'][:40]:<40}  {_fmt(r['total'])}  [{r['category']}]")
 
-    # Month-over-month comparison (last two baseline months)
+    # Month-over-month comparison (last two baseline months only)
     if len(baseline_months) >= 2:
         sorted_months = sorted(baseline_months)
         prev, curr = sorted_months[-2], sorted_months[-1]
@@ -170,36 +184,33 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
         change = _pct_change(prev_total, curr_total)
         lines.append(f"\n  Month-over-month ({prev} → {curr}): {_fmt(prev_total)} → {_fmt(curr_total)}  ({change})")
 
-        # Per-category deltas
         prev_cats = month_data[prev]["by_cat"]
         curr_cats = month_data[curr]["by_cat"]
-        all_cats = set(prev_cats) | set(curr_cats)
-        deltas = []
-        for cat in all_cats:
-            p = prev_cats.get(cat, 0)
-            c = curr_cats.get(cat, 0)
-            if p > 0 or c > 0:
-                deltas.append((cat, p, c, c - p))
+        all_cats  = set(prev_cats) | set(curr_cats)
+        deltas = [
+            (cat, prev_cats.get(cat, 0), curr_cats.get(cat, 0), curr_cats.get(cat, 0) - prev_cats.get(cat, 0))
+            for cat in all_cats
+            if prev_cats.get(cat, 0) > 0 or curr_cats.get(cat, 0) > 0
+        ]
         deltas.sort(key=lambda x: abs(x[3]), reverse=True)
         lines.append("  Category changes (largest first):")
         for cat, p, c, diff in deltas[:6]:
             sign = "+" if diff >= 0 else ""
             lines.append(f"    {cat:<18}  {_fmt(p):>10} → {_fmt(c):>10}   ({sign}{_fmt(diff)})")
 
-    # Current month-to-date (if not a complete baseline month)
+    # Current month-to-date (if current month is not yet a complete baseline)
     today = date.today()
     current_label = today.strftime("%Y-%m")
     if current_label not in baseline_months:
-        mtd_start = f"{current_label}-01"
-        mtd_rows = conn.execute("""
+        mtd_rows = conn.execute(f"""
             SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS cnt
             FROM transactions
             WHERE date >= ?
               AND type = 'debit'
-              AND category NOT IN ('transfer', 'fees', 'investment')
+              AND category NOT IN {_NON_SPEND_SQL}
             GROUP BY category
             ORDER BY total DESC
-        """, (mtd_start,)).fetchall()
+        """, (f"{current_label}-01",)).fetchall()
         if mtd_rows:
             mtd_total = sum(r["total"] for r in mtd_rows)
             lines.append(f"\n  {current_label} (month-to-date, {today.day} days in)  —  spend so far: {_fmt(mtd_total)}")
@@ -210,27 +221,22 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
 
 
 def _section_burn_and_runway(conn: sqlite3.Connection) -> str:
-    """
-    Average monthly burn from baseline months + TD runway from latest statement balance.
-    """
+    """Average monthly burn from all baseline months + TD runway from latest statement balance."""
     lines = ["BURN RATE & RUNWAY", "─" * 60]
 
-    # Average monthly spend across all baseline months (on/after BURN_RATE_START)
-    baseline_months = sorted(_baseline_months(conn, limit=12))  # up to 12 months back
+    baseline_months = sorted(_baseline_months(conn, limit=12))
 
     monthly_totals = []
     for month in baseline_months:
         y, m = map(int, month.split("-"))
-        month_start = f"{month}-01"
-        next_m = f"{y}-{m+1:02d}-01" if m < 12 else f"{y+1}-01-01"
-        total = conn.execute("""
+        total = conn.execute(f"""
             SELECT COALESCE(SUM(amount), 0) AS t
             FROM transactions
             WHERE date >= ? AND date < ?
               AND type = 'debit'
               AND (is_one_time = 0 OR is_one_time IS NULL)
-              AND category NOT IN ('transfer', 'fees', 'investment')
-        """, (month_start, next_m)).fetchone()["t"]
+              AND category NOT IN {_NON_SPEND_SQL}
+        """, (f"{month}-01", _next_month(y, m))).fetchone()["t"]
         monthly_totals.append(total)
 
     if monthly_totals:
@@ -241,9 +247,8 @@ def _section_burn_and_runway(conn: sqlite3.Connection) -> str:
         lines.append(f"  Average monthly burn: {_fmt(avg_burn)}")
     else:
         avg_burn = 0
-        lines.append("  [No baseline months data — cannot compute burn rate]")
+        lines.append(f"  [No complete baseline months yet (need months ending before {(date.today() - timedelta(weeks=5)).strftime('%Y-%m')})]")
 
-    # TD balance from most recent account_balances row
     bal_row = conn.execute("""
         SELECT account, statement_month, closing_balance
         FROM account_balances
@@ -260,8 +265,10 @@ def _section_burn_and_runway(conn: sqlite3.Connection) -> str:
             lines.append(f"  TD Runway: {runway:.1f} months at current burn rate")
             lines.append(f"  NOTE: Income (EQ Bank) not included — actual runway is longer.")
             lines.append(f"  This is the spending pool only. Top-up from EQ as needed.")
+        else:
+            lines.append(f"  [Runway not computable — no burn rate data yet]")
     else:
-        lines.append("\n  [No account_balances data — cannot compute runway]")
+        lines.append("\n  [No account_balances data — import a chequing statement to compute runway]")
 
     return "\n".join(lines)
 
@@ -271,10 +278,13 @@ def _section_bills() -> str:
     try:
         bills = json.loads(BILLS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return "\n".join(lines) + "\n  [bills.local.json not found]"
+        return "\n".join(lines) + "\n  [bills.local.json not found — copy bills.example.json and fill in]"
 
     active = [b for b in bills if b.get("active", True)]
-    total = sum(b["amount"] for b in active)
+    if not active:
+        return "\n".join(lines) + "\n  [No active bills found]"
+
+    total  = sum(b["amount"] for b in active)
     manual = [b["name"] for b in active if not b.get("autopay")]
 
     for b in sorted(active, key=lambda x: -x["amount"]):
@@ -289,33 +299,35 @@ def _section_bills() -> str:
     return "\n".join(lines)
 
 
-def _section_external_accounts() -> str:
+def _section_external_accounts(snap: dict) -> str:
     lines = ["EXTERNAL ACCOUNTS (financial_snapshot.json)", "─" * 60]
 
-    if not SNAPSHOT_FILE.exists():
-        lines.append("  [financial_snapshot.json not found]")
+    if not snap:
+        lines.append("  [financial_snapshot.json not found or empty]")
         lines.append("  Copy financial_snapshot.example.json → financial_snapshot.json and fill in.")
         lines.append("  Include: EQ Bank balance, GIC details, TFSA balance.")
         return "\n".join(lines)
 
-    try:
-        snap = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        return "\n".join(lines) + f"\n  [JSON parse error: {e}]"
+    warnings = []
 
     last_updated = snap.get("_last_updated", "unknown")
     lines.append(f"  Last updated: {last_updated}")
+    if last_updated in ("unknown", "YYYY-MM-DD", ""):
+        warnings.append("  ⚠  _last_updated is not set — update this when you refresh balances")
 
     # EQ Bank
     eq = snap.get("eq_bank", {})
-    if eq.get("savings_balance"):
+    eq_bal = eq.get("savings_balance", 0)
+    if eq_bal and eq_bal > 0:
         rate = eq.get("hisa_rate_pct", 0)
-        annual_interest = eq["savings_balance"] * rate / 100
+        annual_interest = eq_bal * rate / 100
         lines.append(f"\n  EQ Bank HISA")
-        lines.append(f"    Balance:         {_fmt(eq['savings_balance'])}")
+        lines.append(f"    Balance:         {_fmt(eq_bal)}")
         lines.append(f"    Rate:            {rate}% — projected annual interest: {_fmt(annual_interest)}")
         if eq.get("notes"):
             lines.append(f"    Notes:           {eq['notes']}")
+    else:
+        warnings.append("  ⚠  EQ Bank balance is 0 or missing — update financial_snapshot.json")
 
     # GICs
     gics = snap.get("gics", [])
@@ -324,31 +336,36 @@ def _section_external_accounts() -> str:
         gic_total = 0
         for g in gics:
             principal = g.get("principal", 0)
-            rate = g.get("rate_pct", 0)
+            rate      = g.get("rate_pct", 0)
             annual_int = principal * rate / 100
             gic_total += principal
-            tfsa_tag = " [TFSA]" if g.get("is_tfsa") else ""
+            tfsa_tag   = " [TFSA]" if g.get("is_tfsa") else ""
+            mat        = g.get("maturity_date", "unknown")
+            if mat in ("YYYY-MM-DD", "", None):
+                warnings.append(f"  ⚠  GIC '{g.get('nickname','unnamed')}' has no maturity date — fill in financial_snapshot.json")
+            if principal == 0:
+                warnings.append(f"  ⚠  GIC '{g.get('nickname','unnamed')}' has $0 principal — fill in financial_snapshot.json")
             lines.append(f"    {g.get('nickname','GIC')}{tfsa_tag}")
             lines.append(f"      Institution:   {g.get('institution','')}")
             lines.append(f"      Principal:     {_fmt(principal)}   @{rate}%   → {_fmt(annual_int)}/year interest")
-            lines.append(f"      Maturity:      {g.get('maturity_date','unknown')}")
+            lines.append(f"      Maturity:      {mat}")
             if g.get("notes"):
                 lines.append(f"      Notes:         {g['notes']}")
         lines.append(f"    Total in GICs:   {_fmt(gic_total)}")
 
     # TFSA
     tfsa = snap.get("tfsa", {})
-    if tfsa.get("total_balance"):
+    tfsa_bal = tfsa.get("total_balance", 0)
+    if tfsa_bal and tfsa_bal > 0:
         lines.append(f"\n  TFSA")
-        lines.append(f"    Total balance:   {_fmt(tfsa['total_balance'])}")
+        lines.append(f"    Total balance:   {_fmt(tfsa_bal)}")
         if tfsa.get("contribution_room_remaining"):
             lines.append(f"    Room remaining:  {_fmt(tfsa['contribution_room_remaining'])}")
         if tfsa.get("notes"):
             lines.append(f"    Notes:           {tfsa['notes']}")
 
     # Other accounts
-    others = snap.get("other_accounts", [])
-    for acct in others:
+    for acct in snap.get("other_accounts", []):
         if acct.get("balance"):
             lines.append(f"\n  {acct.get('nickname', acct.get('institution', 'Account'))}")
             lines.append(f"    Balance:         {_fmt(acct['balance'])}")
@@ -358,7 +375,7 @@ def _section_external_accounts() -> str:
     if income_sources:
         lines.append(f"\n  Income context")
         for src in income_sources:
-            amt = src.get("approximate_monthly_net_cad", 0)
+            amt   = src.get("approximate_monthly_net_cad", 0)
             until = src.get("expected_until", "unknown")
             lines.append(f"    {src.get('source','')}")
             if amt:
@@ -367,42 +384,62 @@ def _section_external_accounts() -> str:
                 lines.append(f"      {src['notes']}")
 
     # Net worth summary
-    td_note = "(check account_balances for TD balance)"
-    eq_bal = eq.get("savings_balance", 0) if eq else 0
     gic_total_val = sum(g.get("principal", 0) for g in gics)
-    tfsa_bal = tfsa.get("total_balance", 0) if tfsa else 0
     if eq_bal or gic_total_val or tfsa_bal:
         approx_net = eq_bal + gic_total_val + tfsa_bal
         lines.append(f"\n  Approximate net worth (excl. TD Chequing):")
         lines.append(f"    EQ HISA:         {_fmt(eq_bal)}")
         lines.append(f"    GICs:            {_fmt(gic_total_val)}")
         lines.append(f"    TFSA:            {_fmt(tfsa_bal)}")
-        lines.append(f"    Subtotal:        {_fmt(approx_net)}  {td_note}")
+        lines.append(f"    Subtotal:        {_fmt(approx_net)}  (check account_balances for TD balance)")
+
+    if warnings:
+        lines.append(f"\n  DATA WARNINGS:")
+        lines.extend(warnings)
 
     return "\n".join(lines)
 
 
-def _section_upcoming_flags(conn: sqlite3.Connection) -> str:
+def _section_upcoming_flags(snap: dict) -> str:
     lines = ["UPCOMING FLAGS", "─" * 60]
     today = date.today()
+    found = False
 
-    # GIC maturities from snapshot
-    if SNAPSHOT_FILE.exists():
-        try:
-            snap = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
-            for g in snap.get("gics", []):
-                mat = g.get("maturity_date")
-                if mat and mat not in ("YYYY-MM-DD", "", None):
-                    try:
-                        mat_date = date.fromisoformat(mat)
-                        days_to_mat = (mat_date - today).days
-                        if 0 < days_to_mat < 365:
-                            lines.append(f"  ℹ  GIC maturity:    {g.get('nickname','GIC')} ({g.get('institution','')}) — {mat}  ({days_to_mat} days)")
-                            lines.append(f"     Principal {_fmt(g.get('principal',0))} + interest to redeploy.")
-                    except ValueError:
-                        pass
-        except Exception:
-            pass
+    for g in snap.get("gics", []):
+        mat = g.get("maturity_date")
+        if mat and mat not in ("YYYY-MM-DD", "", None):
+            try:
+                mat_date   = date.fromisoformat(mat)
+                days_to_mat = (mat_date - today).days
+                if 0 < days_to_mat < 365:
+                    lines.append(f"  ℹ  GIC maturity:    {g.get('nickname','GIC')} ({g.get('institution','')}) — {mat}  ({days_to_mat} days)")
+                    lines.append(f"     Principal {_fmt(g.get('principal', 0))} + interest to redeploy.")
+                    found = True
+            except ValueError:
+                pass
+
+    if not found:
+        lines.append("  (none in the next 12 months)")
+
+    return "\n".join(lines)
+
+
+def _section_top_transactions(conn: sqlite3.Connection) -> str:
+    rows = conn.execute(f"""
+        SELECT date, description, amount, category, account
+        FROM transactions
+        WHERE type = 'debit'
+          AND category NOT IN {_NON_SPEND_SQL}
+          AND date >= ?
+        ORDER BY amount DESC
+        LIMIT 8
+    """, ((date.today() - timedelta(days=90)).isoformat(),)).fetchall()
+
+    lines = ["TOP TRANSACTIONS (last 90 days, excluding transfers/investment)", "─" * 60]
+    if not rows:
+        lines.append("  (no transactions in the last 90 days)")
+    for r in rows:
+        lines.append(f"  {r['date']}  {_fmt(r['amount']):>10}  {r['category']:<16}  {r['description']}")
 
     return "\n".join(lines)
 
@@ -433,24 +470,6 @@ def _section_unknowns(conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
-def _section_top_transactions(conn: sqlite3.Connection) -> str:
-    rows = conn.execute("""
-        SELECT date, description, amount, category, account
-        FROM transactions
-        WHERE type = 'debit'
-          AND category NOT IN ('transfer', 'fees', 'investment')
-          AND date >= ?
-        ORDER BY amount DESC
-        LIMIT 8
-    """, ((date.today() - timedelta(days=90)).isoformat(),)).fetchall()
-
-    lines = ["TOP TRANSACTIONS (last 90 days, excluding transfers/investment)", "─" * 60]
-    for r in rows:
-        lines.append(f"  {r['date']}  {_fmt(r['amount']):>10}  {r['category']:<16}  {r['description']}")
-
-    return "\n".join(lines)
-
-
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def build_context() -> str:
@@ -460,13 +479,14 @@ def build_context() -> str:
     Returns a plain text block ready to inject into an LLM system or user prompt.
     Call this from the report agent or chat agent — not from the LLM itself.
     """
-    conn = _conn()
+    conn  = _conn()
+    snap  = _load_snapshot()
     today = date.today()
 
     sections = [
-        f"FINANCIAL CONTEXT SNAPSHOT",
+        "FINANCIAL CONTEXT SNAPSHOT",
         f"Generated: {today.isoformat()}",
-        f"{'═' * 60}",
+        "═" * 60,
         "",
         _section_profile(),
         "",
@@ -476,16 +496,16 @@ def build_context() -> str:
         "",
         _section_bills(),
         "",
-        _section_external_accounts(),
+        _section_external_accounts(snap),
         "",
-        _section_upcoming_flags(conn),
+        _section_upcoming_flags(snap),
         "",
         _section_top_transactions(conn),
         "",
         _section_unknowns(conn),
         "",
-        f"{'═' * 60}",
-        f"END OF CONTEXT",
+        "═" * 60,
+        "END OF CONTEXT",
     ]
 
     conn.close()

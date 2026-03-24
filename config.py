@@ -22,7 +22,7 @@ SCHEMA_FILE      = BASE_DIR / "db" / "schema.sql"
 # they're just excluded from the burn rate average because they contain one-time
 # setup costs that don't reflect normal ongoing spending.
 # Change this if you have another unusual period in the future.
-BURN_RATE_START = "2026-01"   # YYYY-MM  — first month of normal spending
+BURN_RATE_START = "2025-12"   # YYYY-MM  — first month of normal spending
 
 # ── AI / Ollama ────────────────────────────────────────────────────────────────
 OLLAMA_MODEL    = "mistral:7b"   # swap to any model you have pulled

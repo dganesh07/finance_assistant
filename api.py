@@ -612,22 +612,25 @@ def get_context():
 
 
 # ── /api/corrections ───────────────────────────────────────────────────────────
+# Note: corrections.json CRUD is managed here directly.
+# The categorizer also has _load_corrections() but that one strips _meta keys and
+# is used for applying rules. These helpers are for reading/writing the raw file.
 
-def _load_corrections() -> dict:
+def _read_corrections_file() -> dict:
     try:
         return json.loads(CORRECTIONS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
 
 
-def _save_corrections(data: dict) -> None:
+def _write_corrections_file(data: dict) -> None:
     CORRECTIONS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 @app.get("/api/corrections")
 def get_corrections():
     """Return all rules in corrections.json (excluding _comment/_format/_how_to_add meta keys)."""
-    raw = _load_corrections()
+    raw = _read_corrections_file()
     return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
@@ -636,20 +639,20 @@ def add_correction(rule: CorrectionRule):
     """Add or update a correction rule. Key is stored uppercase."""
     if rule.category not in CATEGORIES:
         raise HTTPException(400, f"Invalid category '{rule.category}'.")
-    raw = _load_corrections()
+    raw = _read_corrections_file()
     key = rule.key.strip().upper()
     raw[key] = {"category": rule.category, "subcategory": rule.subcategory}
-    _save_corrections(raw)
+    _write_corrections_file(raw)
     return {"key": key, "category": rule.category, "subcategory": rule.subcategory}
 
 
 @app.delete("/api/corrections/{key}")
 def delete_correction(key: str):
     """Remove a correction rule by key."""
-    raw = _load_corrections()
+    raw = _read_corrections_file()
     upper = key.upper()
     if upper not in raw:
         raise HTTPException(404, f"Rule '{upper}' not found.")
     del raw[upper]
-    _save_corrections(raw)
+    _write_corrections_file(raw)
     return {"deleted": upper}

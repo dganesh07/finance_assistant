@@ -33,9 +33,12 @@ console = Console()
 # ── Bills ──────────────────────────────────────────────────────────────────────
 
 def load_bills() -> list[dict]:
-    """Load and return the list of bills from bills.json."""
-    with open(BILLS_FILE, "r") as f:
-        return json.load(f)
+    """Load and return the list of bills from bills.local.json."""
+    try:
+        return json.loads(BILLS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        console.print("[yellow]⚠  bills.local.json not found — copy bills.example.json and fill in.[/yellow]")
+        return []
 
 
 def print_bills(bills: list[dict]) -> None:
@@ -125,7 +128,8 @@ def main() -> None:
 
     # Step 2: Load and display bills
     bills = load_bills()
-    print_bills(bills)
+    if bills:
+        print_bills(bills)
 
     # Step 3: Confirm DB tables exist
     print_db_tables()

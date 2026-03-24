@@ -20,6 +20,7 @@ Run the transparent test:
 """
 
 import json
+import re
 
 import ollama
 
@@ -129,25 +130,22 @@ def _clean_for_llm(description: str) -> str:
          (T&TSUPERMARKET stays as-is; CANADA78 → CANADA 78, SDM267 → SDM 267)
       4. Collapse repeated spaces / trim
     """
-    import re as _re
-
     desc = description
 
     # 1. Payment-processor separator
     desc = desc.replace('*', ' ')
 
     # 2. Strip trailing store/branch numbers
-    desc = _re.sub(r'#\d+', '', desc)       # #NNN anywhere (e.g. "#21 SURREY" → " SURREY")
-    desc = _re.sub(r'[-_]\d+$', '', desc)   # trailing -NNN or _NNN
-    desc = _re.sub(r'\d{2,}$', '', desc)    # trailing bare digit run (e.g. CANADA78 → CANADA)
+    desc = re.sub(r'#\d+', '', desc)       # #NNN anywhere (e.g. "#21 SURREY" → " SURREY")
+    desc = re.sub(r'[-_]\d+$', '', desc)   # trailing -NNN or _NNN
+    desc = re.sub(r'\d{2,}$', '', desc)    # trailing bare digit run (e.g. CANADA78 → CANADA)
 
-    # 3. Space between a letter-run and a digit-run (catches T&TSUPERMARKET → T&T SUPERMARKET
-    #    only when there's no existing separator)
-    desc = _re.sub(r'([A-Za-z])(\d)', r'\1 \2', desc)
-    desc = _re.sub(r'(\d)([A-Za-z])', r'\1 \2', desc)
+    # 3. Space between a letter-run and a digit-run
+    desc = re.sub(r'([A-Za-z])(\d)', r'\1 \2', desc)
+    desc = re.sub(r'(\d)([A-Za-z])', r'\1 \2', desc)
 
     # 4. Collapse whitespace
-    desc = _re.sub(r'\s{2,}', ' ', desc).strip()
+    desc = re.sub(r'\s{2,}', ' ', desc).strip()
 
     return desc
 

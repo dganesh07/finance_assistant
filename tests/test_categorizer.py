@@ -239,7 +239,10 @@ class TestCategorizeTransactions(unittest.TestCase):
         self.assertEqual(result[0]["category"], "groceries")
         self.assertEqual(result[1]["category"], "food")
         self.assertEqual(result[2]["category"], "subscriptions")
-        self.assertEqual(result[0]["subcategory"], "supermarket")
+        # "supermarket" is not in SUBCATEGORIES["groceries"] (empty list) — validator drops to None
+        self.assertIsNone(result[0]["subcategory"])
+        # "streaming" is valid for subscriptions
+        self.assertEqual(result[2]["subcategory"], "streaming")
 
     def test_corrections_applied_before_llm(self):
         """Corrections-matched transactions should not be in the LLM batch."""
