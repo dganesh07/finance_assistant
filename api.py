@@ -9,7 +9,7 @@ Endpoints:
   GET  /api/transactions             — all transactions (filterable)
   GET  /api/transactions/review      — unconfirmed transactions only
   PATCH /api/transactions/{id}       — update category / confirm a row
-  POST /api/transactions/confirm-all — bulk confirm by IDs
+  POST /api/transactions/confirm-all — confirm multiple transactions by IDs
   GET  /api/bills                    — bills from bills.json
   POST /api/apply-corrections        — apply corrections.json to all unknowns (fast, no LLM)
   POST /api/run-categorizer          — trigger Ollama categorizer in background
@@ -78,6 +78,7 @@ class CorrectionRule(BaseModel):
 
 class ConfirmAllRequest(BaseModel):
     ids: list[int]
+
 
 
 # ── /api/categories ────────────────────────────────────────────────────────────
@@ -176,7 +177,7 @@ def get_review_transactions():
     conn = get_conn()
     rows = conn.execute("""
         SELECT id, date, description, amount, type, account,
-               category, subcategory, confirmed, source_file, notes
+               category, subcategory, confirmed, source_file, notes, is_one_time
         FROM transactions
         WHERE confirmed = 0
         ORDER BY date DESC, id DESC
@@ -226,7 +227,7 @@ def get_transactions(
 
     rows = conn.execute(
         f"SELECT id, date, description, amount, type, account, "
-        f"category, subcategory, confirmed, source_file, notes "
+        f"category, subcategory, confirmed, source_file, notes, is_one_time "
         f"FROM transactions {where} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?",
         params + [limit, offset],
     ).fetchall()
@@ -295,6 +296,7 @@ def confirm_all(body: ConfirmAllRequest):
     return {"updated": len(body.ids)}
 
 
+
 # ── POST /api/run-categorizer ─────────────────────────────────────────────────
 
 def _run_categorizer_job(job_id: str) -> None:
@@ -350,6 +352,7 @@ def run_categorizer(background_tasks: BackgroundTasks):
 def apply_corrections_endpoint():
     """
     Apply corrections.json to every transaction that is still 'unknown'.
+    Also backfills subcategories onto already-confirmed rows that have none.
 
     Fast — no LLM involved. Returns immediately with counts.
     Use this after saving new rules in the Review UI so newly-added corrections
@@ -357,29 +360,55 @@ def apply_corrections_endpoint():
     """
     from src.categorizer import _load_corrections, _load_bill_rules, _apply_corrections
 
-    conn     = get_conn()
-    rows     = conn.execute("""
+    conn         = get_conn()
+    bill_rules   = _load_bill_rules()
+    corrections  = _load_corrections()
+    merged_rules = {**bill_rules, **corrections}  # corrections win on conflict
+
+    # ── Pass 1: categorize unknown/unconfirmed rows ─────────────────────────────
+    rows = conn.execute("""
         SELECT id, description, amount, type, category
         FROM transactions
         WHERE (category IS NULL OR category IN ('unknown', '')) AND confirmed = 0
     """).fetchall()
 
-    if not rows:
-        conn.close()
-        return {"applied": 0, "remaining_unknown": 0}
+    applied = 0
+    if rows:
+        txns             = [dict(r) for r in rows]
+        stamped, applied = _apply_corrections(txns, merged_rules)
+        for result in stamped:
+            if result.get("category") not in (None, "unknown", ""):
+                conn.execute(
+                    "UPDATE transactions SET category = ?, subcategory = ?, confirmed = ? WHERE id = ?",
+                    (result["category"], result.get("subcategory"), result.get("confirmed", 1), result["id"]),
+                )
 
-    bill_rules   = _load_bill_rules()
-    corrections  = _load_corrections()
-    merged_rules = {**bill_rules, **corrections}  # corrections win on conflict
-    txns         = [dict(r) for r in rows]
-    stamped, applied = _apply_corrections(txns, merged_rules)
+    # ── Pass 2: backfill missing subcategories on confirmed rows ────────────────
+    # A confirmed transaction may have been categorised before subcategory rules
+    # existed.  If a rule now supplies a subcategory AND the category still
+    # matches, fill in the gap without touching the confirmed flag.
+    confirmed_no_sub = conn.execute("""
+        SELECT id, description, category
+        FROM transactions
+        WHERE confirmed = 1 AND (subcategory IS NULL OR subcategory = '')
+    """).fetchall()
 
-    for result in stamped:
-        if result.get("category") not in (None, "unknown", ""):
-            conn.execute(
-                "UPDATE transactions SET category = ?, subcategory = ?, confirmed = ? WHERE id = ?",
-                (result["category"], result.get("subcategory"), result.get("confirmed", 1), result["id"]),
-            )
+    backfilled = 0
+    for row in confirmed_no_sub:
+        desc_upper = row["description"].upper()
+        for key, override in merged_rules.items():
+            sub = override.get("subcategory")
+            if (
+                sub
+                and key.upper() in desc_upper
+                and override.get("category") == row["category"]
+            ):
+                conn.execute(
+                    "UPDATE transactions SET subcategory = ? WHERE id = ?",
+                    (sub, row["id"]),
+                )
+                backfilled += 1
+                break  # first matching rule wins
 
     conn.commit()
     remaining = conn.execute(
@@ -387,7 +416,107 @@ def apply_corrections_endpoint():
     ).fetchone()[0]
     conn.close()
 
-    return {"applied": applied, "remaining_unknown": remaining}
+    return {"applied": applied, "backfilled_subcategories": backfilled, "remaining_unknown": remaining}
+
+
+# ── GET /api/monthly ───────────────────────────────────────────────────────────
+
+@app.get("/api/monthly")
+def get_monthly(months: int = 6):
+    """
+    Per-month spending breakdown for the last N months that have transactions.
+
+    Returns newest month first. Each month includes:
+      - total_out  : sum of debits (excl. transfer, fees, investment)
+      - total_in   : sum of income credits (excl. transfer, fees, refund)
+      - refunds    : sum of refund credits (reduces net spend)
+      - net        : total_in - (total_out - refunds)
+      - by_category: list of { category, total, count } sorted by total desc
+    """
+    conn = get_conn()
+
+    month_rows = conn.execute("""
+        SELECT DISTINCT strftime('%Y-%m', date) AS month
+        FROM transactions
+        ORDER BY month DESC
+        LIMIT ?
+    """, (months,)).fetchall()
+
+    result = []
+    for row in month_rows:
+        month = row["month"]
+        y, m   = map(int, month.split("-"))
+        m_start = f"{month}-01"
+        m_end   = f"{y}-{m+1:02d}-01" if m < 12 else f"{y+1}-01-01"
+
+        # Regular spend (recurring — used for burn rate)
+        regular_rows = conn.execute("""
+            SELECT category,
+                   COALESCE(SUM(amount), 0) AS total,
+                   COUNT(*) AS count
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'debit'
+              AND (is_one_time = 0 OR is_one_time IS NULL)
+              AND category NOT IN ('transfer', 'fees', 'investment')
+            GROUP BY category
+            ORDER BY total DESC
+        """, (m_start, m_end)).fetchall()
+
+        # One-time spend (flagged items — excluded from burn rate)
+        one_time_rows = conn.execute("""
+            SELECT category, description,
+                   COALESCE(SUM(amount), 0) AS total,
+                   COUNT(*) AS count
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'debit'
+              AND is_one_time = 1
+              AND category NOT IN ('transfer', 'fees', 'investment')
+            GROUP BY category, description
+            ORDER BY total DESC
+        """, (m_start, m_end)).fetchall()
+
+        total_in = conn.execute("""
+            SELECT COALESCE(SUM(amount), 0) AS t
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'credit'
+              AND category NOT IN ('transfer', 'fees', 'refund')
+        """, (m_start, m_end)).fetchone()["t"]
+
+        refunds = conn.execute("""
+            SELECT COALESCE(SUM(amount), 0) AS t
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'credit' AND category = 'refund'
+        """, (m_start, m_end)).fetchone()["t"]
+
+        regular_out  = sum(r["total"] for r in regular_rows)
+        one_time_out = sum(r["total"] for r in one_time_rows)
+        total_out    = regular_out + one_time_out
+
+        result.append({
+            "label":        month,
+            "total_out":    round(total_out,    2),
+            "regular_out":  round(regular_out,  2),
+            "one_time_out": round(one_time_out, 2),
+            "total_in":     round(total_in,     2),
+            "refunds":      round(refunds,      2),
+            "net":          round(total_in - (total_out - refunds), 2),
+            "by_category":  [
+                {"category": r["category"], "total": round(r["total"], 2), "count": r["count"]}
+                for r in regular_rows
+            ],
+            "one_time_items": [
+                {"category": r["category"], "description": r["description"],
+                 "total": round(r["total"], 2), "count": r["count"]}
+                for r in one_time_rows
+            ],
+        })
+
+    conn.close()
+    return {"months": result}
 
 
 # ── GET /api/job/{job_id} ──────────────────────────────────────────────────────

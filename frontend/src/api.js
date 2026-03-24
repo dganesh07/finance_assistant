@@ -25,7 +25,8 @@ const patch = (url, body) =>
 
 export const api = {
   // Summary + stats
-  getSummary: (days = 60) => get(`/api/summary?days=${days}`),
+  getSummary:  (days = 60)    => get(`/api/summary?days=${days}`),
+  getMonthly:  (months = 12)  => get(`/api/monthly?months=${months}`),
 
   // Categories + subcategories (from config.py)
   getCategories:    () => get('/api/categories'),
@@ -50,7 +51,7 @@ export const api = {
   // Update a single transaction (category, confirmed, notes)
   updateTransaction: (id, body) => patch(`/api/transactions/${id}`, body),
 
-  // Bulk confirm
+  // Confirm multiple transactions at once
   confirmAll: (ids) => post('/api/transactions/confirm-all', { ids }),
 
   // Corrections-only pass (fast, no LLM)

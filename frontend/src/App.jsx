@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import Dashboard from './views/Dashboard.jsx'
+import Monthly from './views/Monthly.jsx'
 import Review from './views/Review.jsx'
 import Transactions from './views/Transactions.jsx'
 import { api } from './api.js'
@@ -23,6 +24,7 @@ export default function App() {
       <Sidebar view={view} setView={setView} reviewCount={reviewCount} />
       <main className={styles.main}>
         {view === 'dashboard'     && <Dashboard />}
+        {view === 'monthly'       && <Monthly />}
         {view === 'review'        && <Review onConfirm={refreshReviewCount} />}
         {view === 'transactions'  && <Transactions />}
       </main>

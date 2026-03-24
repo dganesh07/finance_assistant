@@ -4,39 +4,77 @@ import styles from './Transactions.module.css'
 
 /*
  * Transactions view — browse all transactions with search + filters.
- * Click a row's category badge to edit it inline.
+ * Click a row's category/subcategory badge to edit inline.
+ * Click 1× to toggle one-time flag (excluded from burn rate).
  */
 
+const PAGE_SIZE = 75
+
 export default function Transactions() {
-  const [data,       setData]       = useState({ total: 0, transactions: [] })
-  const [categories, setCategories] = useState([])
-  const [loading,    setLoading]    = useState(true)
+  const [data,           setData]           = useState({ total: 0, transactions: [] })
+  const [categories,     setCategories]     = useState([])
+  const [subcategoryMap, setSubcategoryMap] = useState({})
+  const [availMonths,    setAvailMonths]    = useState([])
+  const [loading,        setLoading]        = useState(true)
 
   // Filters
   const [search,    setSearch]    = useState('')
   const [category,  setCategory]  = useState('')
   const [dateFrom,  setDateFrom]  = useState('')
   const [dateTo,    setDateTo]    = useState('')
+  const [monthPick, setMonthPick] = useState('')
 
-  // Inline edit state: { id, category }
+  // Pagination
+  const [page, setPage] = useState(0)
+
+  // Inline edit state: { id, category, subcategory }
   const [editing, setEditing] = useState(null)
+
+  useEffect(() => { setPage(0) }, [search, category, dateFrom, dateTo, monthPick])
 
   const load = useCallback(() => {
     setLoading(true)
-    api.getTransactions({ search, category, date_from: dateFrom, date_to: dateTo, limit: 200 })
+    let from = dateFrom, to = dateTo
+    if (monthPick) {
+      const [y, m] = monthPick.split('-').map(Number)
+      from = `${monthPick}-01`
+      to   = `${monthPick}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+    }
+    api.getTransactions({ search, category, date_from: from, date_to: to,
+                          limit: PAGE_SIZE, offset: page * PAGE_SIZE })
       .then(setData)
       .finally(() => setLoading(false))
-  }, [search, category, dateFrom, dateTo])
+  }, [search, category, dateFrom, dateTo, monthPick, page])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { api.getCategories().then(setCategories) }, [])
+  useEffect(() => {
+    api.getCategories().then(setCategories)
+    api.getSubcategories().then(setSubcategoryMap)
+    api.getMonthly(24).then(d => setAvailMonths((d.months ?? []).map(m => m.label)))
+  }, [])
 
-  // Save inline edit
+  // ── Inline edit ─────────────────────────────────────────────────────────────
+  const startEdit = txn =>
+    setEditing({ id: txn.id, category: txn.category, subcategory: txn.subcategory ?? '' })
+
   const saveEdit = async (id) => {
     if (!editing || editing.id !== id) return
-    await api.updateTransaction(id, { category: editing.category })
+    await api.updateTransaction(id, { category: editing.category,
+                                       subcategory: editing.subcategory || null })
     setEditing(null)
     load()
+  }
+
+  // ── One-time toggle ─────────────────────────────────────────────────────────
+  const toggleOneTime = async (txn) => {
+    const next = txn.is_one_time ? 0 : 1
+    await api.updateTransaction(txn.id, { is_one_time: next })
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === txn.id ? { ...t, is_one_time: next } : t
+      ),
+    }))
   }
 
   return (
@@ -45,39 +83,42 @@ export default function Transactions() {
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>// transactions</h1>
-          <p className={styles.subtitle}>{data.total} rows</p>
+          <p className={styles.subtitle}>
+            {data.total} rows
+            {data.total > PAGE_SIZE && (
+              <span style={{ marginLeft: 8 }}>
+                · showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, data.total)}
+              </span>
+            )}
+          </p>
         </div>
       </div>
 
       {/* ── Filters ── */}
       <div className={styles.filters}>
-        <input
-          type="text"
-          placeholder="Search description…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className={styles.searchInput}
-        />
+        <input type="text" placeholder="Search description…" value={search}
+          onChange={e => setSearch(e.target.value)} className={styles.searchInput} />
         <select value={category} onChange={e => setCategory(e.target.value)}>
           <option value="">All categories</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={e => setDateFrom(e.target.value)}
-          title="From date"
-        />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={e => setDateTo(e.target.value)}
-          title="To date"
-        />
-        <button
-          className={styles.clearBtn}
-          onClick={() => { setSearch(''); setCategory(''); setDateFrom(''); setDateTo('') }}
-        >
+        <select value={monthPick}
+          onChange={e => { setMonthPick(e.target.value); setDateFrom(''); setDateTo('') }}
+          className={styles.monthInput}>
+          <option value="">All months</option>
+          {availMonths.map(m => {
+            const [y, mo] = m.split('-')
+            const label = new Date(y, mo - 1).toLocaleString('en-CA', { month: 'short', year: 'numeric' })
+            return <option key={m} value={m}>{label}</option>
+          })}
+        </select>
+        <input type="date" value={dateFrom}
+          onChange={e => { setDateFrom(e.target.value); setMonthPick('') }} title="From date" />
+        <input type="date" value={dateTo}
+          onChange={e => { setDateTo(e.target.value); setMonthPick('') }} title="To date" />
+        <button className={styles.clearBtn}
+          onClick={() => { setSearch(''); setCategory(''); setDateFrom('');
+                           setDateTo(''); setMonthPick(''); setPage(0) }}>
           Clear
         </button>
       </div>
@@ -98,64 +139,102 @@ export default function Transactions() {
                 <th>Account</th>
                 <th>Category</th>
                 <th>Subcategory</th>
-                <th className={styles.center}>Confirmed</th>
+                <th className={styles.center}>✓</th>
+                <th className={styles.center} title="One-time — excluded from burn rate">1×</th>
               </tr>
             </thead>
             <tbody>
               {data.transactions.map(txn => {
-                const isDebit  = txn.type === 'debit'
-                const amtColor = isDebit ? 'var(--red)' : 'var(--green)'
+                const isDebit   = txn.type === 'debit'
+                const amtColor  = isDebit ? 'var(--red)' : 'var(--green)'
                 const isEditing = editing?.id === txn.id
+                const subOptions = subcategoryMap[isEditing ? editing.category : txn.category] ?? []
 
                 return (
                   <tr key={txn.id} className={styles.row}>
                     <td className={styles.date}>{txn.date}</td>
-                    <td className={styles.desc} title={txn.description}>
-                      {txn.description}
-                    </td>
+                    <td className={styles.desc} title={txn.description}>{txn.description}</td>
                     <td className={styles.right} style={{ color: amtColor, fontFamily: 'var(--font-mono)' }}>
                       {isDebit ? '-' : '+'}${txn.amount.toFixed(2)}
                     </td>
                     <td className={styles.account}>{txn.account}</td>
+
+                    {/* ── Category ── */}
                     <td>
                       {isEditing ? (
                         <div className={styles.inlineEdit}>
-                          <select
-                            autoFocus
-                            value={editing.category}
-                            onChange={e => setEditing({ id: txn.id, category: e.target.value })}
-                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}
-                          >
+                          <select autoFocus value={editing.category}
+                            onChange={e => setEditing(p => ({ ...p, category: e.target.value, subcategory: '' }))}
+                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}>
                             {categories.map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
                           <button className={styles.saveBtn} onClick={() => saveEdit(txn.id)}>Save</button>
                           <button className={styles.cancelBtn} onClick={() => setEditing(null)}>×</button>
                         </div>
                       ) : (
-                        <span
-                          className={styles.catBadge}
-                          onClick={() => setEditing({ id: txn.id, category: txn.category })}
-                          title="Click to edit"
-                        >
+                        <span className={styles.catBadge} onClick={() => startEdit(txn)} title="Click to edit">
                           {txn.category}
                         </span>
                       )}
                     </td>
-                    <td className={styles.sub}>{txn.subcategory ?? '—'}</td>
+
+                    {/* ── Subcategory ── */}
+                    <td className={styles.sub}>
+                      {isEditing ? (
+                        subOptions.length > 0 ? (
+                          <select value={editing.subcategory}
+                            onChange={e => setEditing(p => ({ ...p, subcategory: e.target.value }))}
+                            className={styles.subSelect}
+                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}>
+                            <option value="">— none —</option>
+                            {subOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        ) : (
+                          <span style={{ color: 'var(--muted)', fontSize: 10 }}>no subcategories</span>
+                        )
+                      ) : txn.subcategory ? (
+                        <span className={styles.subBadge} onClick={() => startEdit(txn)} title="Click to edit">
+                          {txn.subcategory}
+                        </span>
+                      ) : (
+                        <span className={styles.subBadgeEmpty} onClick={() => startEdit(txn)} title="Click to add">—</span>
+                      )}
+                    </td>
+
                     <td className={styles.center}>
                       {txn.confirmed
                         ? <span style={{ color: 'var(--green)' }}>✓</span>
-                        : <span style={{ color: 'var(--muted)' }}>—</span>
-                      }
+                        : <span style={{ color: 'var(--muted)' }}>—</span>}
+                    </td>
+
+                    {/* ── One-time toggle ── */}
+                    <td className={styles.center}>
+                      <button
+                        className={txn.is_one_time ? styles.oneTimeOn : styles.oneTimeOff}
+                        onClick={() => toggleOneTime(txn)}
+                        title={txn.is_one_time ? 'One-time — click to unmark' : 'Mark as one-time'}>
+                        1×
+                      </button>
                     </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
-          {data.total > 200 && (
-            <p className={styles.limitNote}>Showing first 200 of {data.total} rows.</p>
-          )}
+
+          {/* ── Pagination ── */}
+          {data.total > PAGE_SIZE && (() => {
+            const totalPages = Math.ceil(data.total / PAGE_SIZE)
+            return (
+              <div className={styles.pagination}>
+                <button className={styles.pageBtn} onClick={() => setPage(0)} disabled={page === 0}>«</button>
+                <button className={styles.pageBtn} onClick={() => setPage(p => p - 1)} disabled={page === 0}>‹</button>
+                <span className={styles.pageInfo}>{page + 1} / {totalPages}</span>
+                <button className={styles.pageBtn} onClick={() => setPage(p => p + 1)} disabled={page >= totalPages - 1}>›</button>
+                <button className={styles.pageBtn} onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}>»</button>
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>

@@ -1,9 +1,10 @@
 import styles from './Sidebar.module.css'
 
 const NAV = [
-  { id: 'dashboard',    label: 'Dashboard',     icon: '▦' },
-  { id: 'review',       label: 'Review',         icon: '◈' },
-  { id: 'transactions', label: 'Transactions',   icon: '≡' },
+  { id: 'dashboard',    label: 'Dashboard',    icon: '▦' },
+  { id: 'monthly',      label: 'Monthly',      icon: '◫' },
+  { id: 'review',       label: 'Review',       icon: '◈' },
+  { id: 'transactions', label: 'Transactions', icon: '≡' },
 ]
 
 export default function Sidebar({ view, setView, reviewCount }) {

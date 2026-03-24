@@ -62,14 +62,14 @@ function BillRow({ bill }) {
   )
 }
 
-const CustomTooltip = ({ active, payload }) => {
+const CustomTooltip = ({ active, payload, period }) => {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
   return (
     <div className={styles.tooltip}>
       <div className={styles.tooltipLabel}>{d.category}</div>
       <div className={styles.tooltipValue}>${d.total.toFixed(2)}</div>
-      <div className={styles.tooltipSub}>{d.count} transactions</div>
+      <div className={styles.tooltipSub}>{d.count} transactions · {period}</div>
     </div>
   )
 }
@@ -80,7 +80,7 @@ export default function Dashboard() {
   const [summary, setSummary]   = useState(null)
   const [bills,   setBills]     = useState([])
   const [loading, setLoading]   = useState(true)
-  const [days,    setDays]      = useState(90)
+  const [days,    setDays]      = useState(180)
 
   useEffect(() => {
     setLoading(true)
@@ -173,7 +173,7 @@ export default function Dashboard() {
                   axisLine={false}
                   tickLine={false}
                 />
-                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                <Tooltip content={<CustomTooltip period={summary.period} />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
                 <Bar dataKey="total" radius={[0, 4, 4, 0]}>
                   {chartData.map((entry) => (
                     <Cell key={entry.category} fill={catColor(entry.category)} fillOpacity={0.85} />

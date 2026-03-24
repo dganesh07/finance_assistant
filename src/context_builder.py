@@ -128,20 +128,38 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
             FROM transactions
             WHERE date >= ? AND date < ?
               AND type = 'debit'
+              AND (is_one_time = 0 OR is_one_time IS NULL)
               AND category NOT IN ('transfer', 'fees', 'investment')
             GROUP BY category
             ORDER BY total DESC
         """, (month_start, next_m)).fetchall()
 
-        total_spend = sum(r["total"] for r in rows)
+        one_time_rows = conn.execute("""
+            SELECT description, category,
+                   COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'debit'
+              AND is_one_time = 1
+              AND category NOT IN ('transfer', 'fees', 'investment')
+            GROUP BY description, category
+            ORDER BY total DESC
+        """, (month_start, next_m)).fetchall()
+
+        total_spend   = sum(r["total"] for r in rows)
+        one_time_total = sum(r["total"] for r in one_time_rows)
         month_data[month] = {
             "total": total_spend,
             "by_cat": {r["category"]: r["total"] for r in rows},
         }
 
-        lines.append(f"\n  {month}  —  total spend: {_fmt(total_spend)}")
+        lines.append(f"\n  {month}  —  regular spend: {_fmt(total_spend)}")
         for r in rows:
             lines.append(f"    {r['category']:<18}  {_fmt(r['total']):>10}   ({r['cnt']} txns)")
+        if one_time_rows:
+            lines.append(f"    {'[one-time charges]':<18}  {_fmt(one_time_total):>10}   (excluded from burn rate)")
+            for r in one_time_rows:
+                lines.append(f"      ↳ {r['description'][:40]:<40}  {_fmt(r['total'])}  [{r['category']}]")
 
     # Month-over-month comparison (last two baseline months)
     if len(baseline_months) >= 2:
@@ -210,6 +228,7 @@ def _section_burn_and_runway(conn: sqlite3.Connection) -> str:
             FROM transactions
             WHERE date >= ? AND date < ?
               AND type = 'debit'
+              AND (is_one_time = 0 OR is_one_time IS NULL)
               AND category NOT IN ('transfer', 'fees', 'investment')
         """, (month_start, next_m)).fetchone()["t"]
         monthly_totals.append(total)
@@ -366,23 +385,6 @@ def _section_external_accounts() -> str:
 def _section_upcoming_flags(conn: sqlite3.Connection) -> str:
     lines = ["UPCOMING FLAGS", "─" * 60]
     today = date.today()
-
-    # Contract end — June 2026
-    contract_end = date(2026, 6, 30)
-    days_to_contract = (contract_end - today).days
-    if days_to_contract > 0:
-        lines.append(f"  ⚠  Contract end:     {contract_end}   ({days_to_contract} days / ~{days_to_contract//30} months away)")
-        lines.append(f"     Income from EQ Bank stops unless new contract/job secured by then.")
-    else:
-        lines.append(f"  ⚠  Contract end date ({contract_end}) has passed. Income status unknown.")
-
-    # ICBC renewal — October 2026
-    icbc_renewal = date(2026, 10, 1)
-    days_to_icbc = (icbc_renewal - today).days
-    if days_to_icbc > 0:
-        months_to_icbc = days_to_icbc // 30
-        lines.append(f"  ⚠  ICBC renewal:     {icbc_renewal}   ({days_to_icbc} days / ~{months_to_icbc} months away)")
-        lines.append(f"     Annual insurance ~$2,043. Budget accordingly.")
 
     # GIC maturities from snapshot
     if SNAPSHOT_FILE.exists():

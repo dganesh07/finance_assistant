@@ -23,7 +23,7 @@ import json
 
 import ollama
 
-from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, OLLAMA_MODEL, PROFILE_FILE
+from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, OLLAMA_MODEL, PROFILE_FILE, SUBCATEGORIES
 
 BATCH_SIZE = 20  # transactions per LLM call
 
@@ -152,6 +152,24 @@ def _clean_for_llm(description: str) -> str:
     return desc
 
 
+def _build_category_block() -> str:
+    """
+    Build the category + subcategory reference block for the prompt.
+
+    Format:
+        groceries (no subcategory)
+        transport → gas | parking | transit | rideshare | car_service | car_repair
+    """
+    lines = []
+    for cat in CATEGORIES:
+        subs = SUBCATEGORIES.get(cat, [])
+        if subs:
+            lines.append(f"  {cat} → {' | '.join(subs)}")
+        else:
+            lines.append(f"  {cat}")
+    return "\n".join(lines)
+
+
 def build_prompt(transactions: list[dict], profile: str = "") -> str:
     """
     Build the categorization prompt for one batch.
@@ -159,43 +177,43 @@ def build_prompt(transactions: list[dict], profile: str = "") -> str:
     Only include transactions that don't yet have a category (corrections
     are applied before this is called, so confirmed ones are skipped).
     """
-    cats = ", ".join(CATEGORIES)
+    category_block = _build_category_block()
 
     txn_lines = []
     for i, t in enumerate(transactions, start=1):
         direction = "spent" if t.get("type") == "debit" else "received"
-        # Clean description for LLM readability — original stays in DB
-        readable = _clean_for_llm(t["description"])
-        txn_lines.append(
-            f'{i}. "{readable}" — ${t["amount"]:.2f} ({direction})'
-        )
+        readable  = _clean_for_llm(t["description"])
+        txn_lines.append(f'{i}. "{readable}" — ${t["amount"]:.2f} ({direction})')
     txn_block = "\n".join(txn_lines)
 
     profile_section = (
         f"\n\nUser financial profile (use this to improve accuracy):\n{profile}"
-        if profile
-        else ""
+        if profile else ""
     )
 
     return f"""\
-You are a personal finance categorizer. Assign each transaction below to exactly \
-one category from this list:
+You are a personal finance categorizer. Assign each transaction to a category, \
+then optionally a subcategory.
 
-{cats}
+Categories and their ONLY allowed subcategories (use null if none fit or the category has none listed):
+{category_block}
 
 Rules:
 - Reply with ONLY a valid JSON array — no explanation, no markdown, no extra text.
 - One object per transaction, in the same order they appear.
 - Each object must have:
-    "index"      : the transaction number (1-based, matches the list below)
-    "category"   : one value from the category list above
-    "subcategory": a short optional label (e.g. "supermarket", "streaming") or null
-- If unsure, use "other".
+    "index"      : the transaction number (1-based)
+    "category"   : one category from the list above
+    "subcategory": one subcategory from that category's → list, or null
+- subcategory MUST be null if the category has no → list, or if none of the listed options fit.
+- Do NOT invent subcategories. Only use values shown after →.
+- If unsure on category, use "other".
 
-Merchant name hints:
-- "*" in a merchant name is a payment processor separator — the word before or after it is the real company name (e.g. "APPLE*MUSIC" → Apple Music → subscriptions/streaming).
-- Use the dollar amount as a signal: small recurring amounts ($5–$50) with a tech/media company name are almost always subscriptions; large one-off amounts may be shopping, rent, or transfer.
-- "received" transactions are likely income or transfer, not spending.{profile_section}
+Hints:
+- "*" separates payment processor from merchant (e.g. "APPLE*MUSIC" → subscriptions, ai_tool or streaming).
+- Small recurring amounts ($5–$50) from tech/media companies → subscriptions.
+- Large transfers between accounts → transfer.
+- "received" transactions → income or transfer, not spending.{profile_section}
 
 Transactions:
 {txn_block}
@@ -271,11 +289,19 @@ def categorize_transactions(transactions: list[dict]) -> list[dict]:
                 batch_idx = int(item["index"]) - 1   # 0-based within this batch
                 if 0 <= batch_idx < len(batch_pairs):
                     orig_idx = batch_pairs[batch_idx][0]
+
                     cat = item.get("category", "other").lower().strip()
                     if cat not in CATEGORIES:
                         cat = "other"
+
+                    # Validate subcategory against the allowed list for this category.
+                    # If Ollama returns something not in the list, drop it to null.
+                    raw_sub    = (item.get("subcategory") or "").lower().strip() or None
+                    allowed    = SUBCATEGORIES.get(cat, [])
+                    subcategory = raw_sub if (raw_sub and raw_sub in allowed) else None
+
                     results[orig_idx]["category"]    = cat
-                    results[orig_idx]["subcategory"] = item.get("subcategory") or None
+                    results[orig_idx]["subcategory"] = subcategory
                     results[orig_idx]["confirmed"]   = 0  # LLM guess — not confirmed
 
         except ollama.ResponseError as e:
