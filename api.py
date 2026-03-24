@@ -32,7 +32,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, DB_PATH, STATEMENTS_DIR
+from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, DB_PATH, STATEMENTS_DIR, SUBCATEGORIES
 from src.categorizer import categorize_transactions
 from src.context_builder import build_context
 from src.parser import parse_new_statements
@@ -63,9 +63,11 @@ _jobs: dict[str, dict] = {}
 # ── Request models ─────────────────────────────────────────────────────────────
 
 class TransactionUpdate(BaseModel):
-    category:  Optional[str] = None
-    confirmed: Optional[int] = None
-    notes:     Optional[str] = None
+    category:    Optional[str] = None
+    subcategory: Optional[str] = None
+    confirmed:   Optional[int] = None
+    is_one_time: Optional[int] = None
+    notes:       Optional[str] = None
 
 
 class CorrectionRule(BaseModel):
@@ -83,6 +85,12 @@ class ConfirmAllRequest(BaseModel):
 @app.get("/api/categories")
 def get_categories():
     return CATEGORIES
+
+
+@app.get("/api/subcategories")
+def get_subcategories():
+    """Return the canonical subcategory map: { category: [subcategory, ...] }"""
+    return SUBCATEGORIES
 
 
 # ── /api/bills ─────────────────────────────────────────────────────────────────
@@ -111,9 +119,11 @@ def get_summary(days: int = 60):
 
     row = conn.execute("""
         SELECT
-            COALESCE(SUM(CASE WHEN type='credit' AND category NOT IN ('transfer','fees')
+            COALESCE(SUM(CASE WHEN type='credit' AND category NOT IN ('transfer','fees','refund')
                               THEN amount ELSE 0 END), 0) AS total_in,
             COALESCE(SUM(CASE WHEN type='debit'  AND category NOT IN ('transfer','fees')
+                              THEN amount ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN type='credit' AND category = 'refund'
                               THEN amount ELSE 0 END), 0) AS total_out
         FROM transactions
         WHERE date >= ?
@@ -125,12 +135,12 @@ def get_summary(days: int = 60):
 
     cats = conn.execute("""
         SELECT category,
-               COALESCE(SUM(amount), 0) AS total,
+               COALESCE(SUM(CASE WHEN type='debit' THEN amount ELSE -amount END), 0) AS total,
                COUNT(*) AS count
         FROM transactions
         WHERE date >= ?
-          AND type = 'debit'
           AND category NOT IN ('transfer', 'fees')
+          AND (type = 'debit' OR category = 'refund')
         GROUP BY category
         ORDER BY total DESC
     """, (period_start,)).fetchall()
@@ -247,9 +257,11 @@ def update_transaction(txn_id: int, body: TransactionUpdate):
         raise HTTPException(404, "Transaction not found")
 
     fields, params = [], []
-    if body.category  is not None: fields.append("category = ?");  params.append(body.category)
-    if body.confirmed is not None: fields.append("confirmed = ?"); params.append(body.confirmed)
-    if body.notes     is not None: fields.append("notes = ?");     params.append(body.notes)
+    if body.category    is not None: fields.append("category = ?");    params.append(body.category)
+    if body.subcategory is not None: fields.append("subcategory = ?"); params.append(body.subcategory)
+    if body.confirmed   is not None: fields.append("confirmed = ?");   params.append(body.confirmed)
+    if body.is_one_time is not None: fields.append("is_one_time = ?"); params.append(body.is_one_time)
+    if body.notes       is not None: fields.append("notes = ?");       params.append(body.notes)
 
     if fields:
         conn.execute(

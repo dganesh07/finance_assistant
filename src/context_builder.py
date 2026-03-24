@@ -67,18 +67,29 @@ def _section_profile() -> str:
 
 def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
     """
-    Return the most recent N calendar months that are on or after BURN_RATE_START.
-    These are the months used for burn rate and month-over-month comparisons.
-    The cutoff date lives in config.py — no personal context in the DB.
+    Return the most recent N *likely-complete* calendar months on or after BURN_RATE_START.
+
+    'Likely complete' means the month ended at least 5 weeks ago.
+    Why: TD statements run mid-month to mid-month (e.g. Dec31–Jan27, Jan27–Feb28).
+    If you import only one statement, the month it straddles will be partially covered.
+    Waiting 5 weeks from month-end means the following statement has almost certainly
+    been downloaded and imported, so both halves of that month are in the DB.
+
+    This is a heuristic, not a guarantee — if you haven't imported a statement yet,
+    that month's total will still be understated. The fix is: import all statements
+    before reading burn rate numbers.
     """
+    # 5 weeks ago — any month that ended before this is treated as likely complete
+    cutoff = (date.today() - timedelta(weeks=5)).strftime("%Y-%m")
+
     rows = conn.execute("""
         SELECT DISTINCT strftime('%Y-%m', date) AS month
         FROM transactions
         WHERE strftime('%Y-%m', date) >= ?
-          AND strftime('%Y-%m', date) < strftime('%Y-%m', 'now')
+          AND strftime('%Y-%m', date) <= ?
         ORDER BY month DESC
         LIMIT ?
-    """, (BURN_RATE_START, limit)).fetchall()
+    """, (BURN_RATE_START, cutoff, limit)).fetchall()
     return [r["month"] for r in rows]
 
 

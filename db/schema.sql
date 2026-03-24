@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     category    TEXT    DEFAULT 'unknown',
     subcategory TEXT,
     confirmed   INTEGER DEFAULT 0,        -- 1 = manually confirmed category
+    is_one_time INTEGER DEFAULT 0,        -- 1 = one-off cost, excluded from burn rate average
     source_file TEXT,
     hash        TEXT    UNIQUE,           -- md5(date+description+amount), for dedup
     notes       TEXT,

@@ -27,8 +27,9 @@ export const api = {
   // Summary + stats
   getSummary: (days = 60) => get(`/api/summary?days=${days}`),
 
-  // Categories list (from config.py)
-  getCategories: () => get('/api/categories'),
+  // Categories + subcategories (from config.py)
+  getCategories:    () => get('/api/categories'),
+  getSubcategories: () => get('/api/subcategories'),
 
   // Bills from bills.json
   getBills: () => get('/api/bills'),

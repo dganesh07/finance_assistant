@@ -22,7 +22,9 @@ export default function Review({ onConfirm }) {
   const [tab,                setTab]                = useState('needs_review')
   const [transactions,       setTransactions]       = useState([])
   const [categories,         setCategories]         = useState([])
+  const [subcategoryMap,     setSubcategoryMap]     = useState({}) // category → [subcategory]
   const [localCats,          setLocalCats]          = useState({}) // id → chosen category (pending save)
+  const [localSubs,          setLocalSubs]          = useState({}) // id → chosen subcategory (pending save)
   const [saveAsRule,         setSaveAsRule]          = useState({}) // id → bool (save as correction rule)
   const [loading,            setLoading]            = useState(true)
   const [jobStatus,          setJobStatus]          = useState(null) // null | 'running' | 'done' | 'error'
@@ -58,10 +60,11 @@ export default function Review({ onConfirm }) {
       })
     }
 
-    Promise.all([txnPromise, api.getCategories()])
-      .then(([txns, cats]) => {
+    Promise.all([txnPromise, api.getCategories(), api.getSubcategories()])
+      .then(([txns, cats, subMap]) => {
         setTransactions(txns)
         setCategories(cats)
+        setSubcategoryMap(subMap)
         const seed = {}
         txns.forEach(t => { seed[t.id] = t.category ?? 'other' })
         if (tab === 'confirmed') setConfirmedLocalCats(seed)
@@ -84,12 +87,18 @@ export default function Review({ onConfirm }) {
       return
     }
 
+    const effectiveSub = localSubs[txn.id] ?? txn.subcategory ?? null
+
     // Save as permanent correction rule if toggled (works for AI guesses too)
     if (saveAsRule[txn.id]) {
-      await api.addCorrection(txn.description, effectiveCat)
+      await api.addCorrection(txn.description, effectiveCat, effectiveSub)
     }
 
-    await api.updateTransaction(txn.id, { category: effectiveCat, confirmed: 1 })
+    await api.updateTransaction(txn.id, {
+      category:    effectiveCat,
+      subcategory: effectiveSub,
+      confirmed:   1,
+    })
     setTransactions(prev => prev.filter(t => t.id !== txn.id))
     onConfirm?.()
   }
@@ -411,8 +420,11 @@ export default function Review({ onConfirm }) {
                   key={txn.id}
                   txn={txn}
                   categories={categories}
+                  subcategoryMap={subcategoryMap}
                   localCat={localCats[txn.id] ?? txn.category}
+                  localSub={localSubs[txn.id] ?? txn.subcategory ?? ''}
                   onCatChange={cat => setLocalCats(p => ({ ...p, [txn.id]: cat }))}
+                  onSubChange={sub => setLocalSubs(p => ({ ...p, [txn.id]: sub }))}
                   saveAsRule={saveAsRule[txn.id] ?? false}
                   onSaveAsRuleChange={v => setSaveAsRule(p => ({ ...p, [txn.id]: v }))}
                   onConfirm={() => confirmOne(txn)}
@@ -428,7 +440,7 @@ export default function Review({ onConfirm }) {
 
 // ── Single row (needs review) ───────────────────────────────────────────────────
 
-function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveAsRuleChange, onConfirm }) {
+function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatChange, onSubChange, saveAsRule, onSaveAsRuleChange, onConfirm }) {
   const isDebit    = txn.type === 'debit'
   const amtColor   = isDebit ? 'var(--red)' : 'var(--green)'
   const sign       = isDebit ? '-' : '+'
@@ -438,6 +450,9 @@ function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveA
   const ruleLabel  = isUnpicked ? null
     : (changed || !aiHasGuess) ? 'save as rule'
     : 'pin AI guess as rule'
+
+  // Subcategory options for the currently selected category
+  const subOptions = (subcategoryMap[localCat] ?? [])
 
   return (
     <tr className={styles.row}>
@@ -449,14 +464,30 @@ function ReviewRow({ txn, categories, localCat, onCatChange, saveAsRule, onSaveA
       <td className={styles.account}>{txn.account}</td>
       <td>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* Category picker */}
           <select
             value={isUnpicked ? '' : localCat}
-            onChange={e => onCatChange(e.target.value)}
+            onChange={e => { onCatChange(e.target.value); onSubChange('') /* reset sub when cat changes */ }}
             className={changed ? styles.selectChanged : isUnpicked ? styles.selectUnpicked : styles.select}
           >
             {isUnpicked && <option value="" disabled>— pick a category —</option>}
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
+
+          {/* Subcategory picker — always shown when category has defined subcategories */}
+          {!isUnpicked && subOptions.length > 0 && (
+            <select
+              value={localSub}
+              onChange={e => onSubChange(e.target.value)}
+              className={styles.select}
+              style={{ fontSize: 11, opacity: 0.85 }}
+            >
+              <option value="">— subcategory (optional) —</option>
+              {subOptions.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+
+          {/* Save as rule toggle */}
           {ruleLabel && (
             <label className={styles.ruleToggle}>
               <input

@@ -34,7 +34,7 @@ CATEGORIES = [
     "food",
     "cannabis",
     "shopping",
-    "insurance",
+    "hobbies",
     "self_care",
     "health",
     "subscriptions",
@@ -43,9 +43,36 @@ CATEGORIES = [
     "utilities",
     "rent",
     "income",
+    "refund",
     "transfer",
     "investment",
+    "insurance",
     "atm",
     "fees",
     "other",
 ]
+
+# ── Canonical subcategories per category ───────────────────────────────────────
+# Defines the valid subcategory options shown in the Review UI dropdown.
+# Corrections.json can use any subcategory string — this list just drives the UI.
+# Add to a list here when you find a new recurring subcategory you want to track.
+SUBCATEGORIES: dict[str, list[str]] = {
+    "transport":     ["gas", "parking", "transit", "rideshare", "car_service", "car_repair"],
+    "health":        ["supplements", "pharmacy", "docter", "dental", "therapy", "emergency"],
+    "food":          ["restaurant", "fast_food", "takeout", "delivery"],
+    "groceries":     ["supermarket", "costco"],
+    "shopping":      [],
+    "subscriptions": ["streaming", "app", "cloud-storage", "ai_tool"],
+    "self_care":     ["massage", "skincare", "spa", "grooming"],
+    "hobbies":       ["games", "tarot", "books", "crafts"],
+    "travel":        [],
+    "fees":          ["bank_fees", "atm"],
+    "utilities":     ["internet", "phone", "electricity"],
+    "insurance":     ["car", "home", "device"],
+    "rent":          [],
+    "income":        ["work", "other"],
+    "refund":        [],
+    "transfer":      [],
+    "investment":    [],
+    "other":         [],
+}

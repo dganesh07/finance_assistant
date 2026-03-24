@@ -38,6 +38,7 @@ def initialize_db() -> None:
     # if the column already exists, which we safely ignore.
     migrations = [
         "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
+        "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
