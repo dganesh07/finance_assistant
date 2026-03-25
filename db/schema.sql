@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS account_balances (
     closing_balance REAL,                      -- balance at the end of the statement period
     statement_start TEXT,                      -- official start date of the statement period (YYYY-MM-DD)
     statement_end   TEXT,                      -- official end date of the statement period (YYYY-MM-DD)
+    covers_month    INTEGER DEFAULT 0,         -- 1 = any stored statement covers the last day of statement_month
     source_file     TEXT,                      -- which statement filename this was read from
     captured_at     TEXT    DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account, statement_month)           -- one balance row per account per month; re-parse updates it
@@ -81,7 +82,6 @@ CREATE TABLE IF NOT EXISTS account_balances (
 
 -- spending_periods: one row per calendar month.
 -- is_baseline = 0 → exclude from burn rate / average calculations (e.g. setup period).
--- is_complete = 1 → a full statement has been imported for this month.
 -- Pre-populated by init_db for known setup months; auto-extended by parser as new statements arrive.
 CREATE TABLE IF NOT EXISTS spending_periods (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +89,6 @@ CREATE TABLE IF NOT EXISTS spending_periods (
     year         INTEGER NOT NULL,
     month        INTEGER NOT NULL,             -- 1–12
     is_baseline  INTEGER DEFAULT 1,            -- 0 = non-representative month, skip in baselines
-    is_complete  INTEGER DEFAULT 0,            -- 1 = full statement imported
     notes        TEXT,
     UNIQUE(year, month)
 );

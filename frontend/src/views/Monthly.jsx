@@ -34,6 +34,14 @@ const pctChange = (prev, curr) => {
 const ACCT_SHORT = { chequing: 'CHQ', creditcard: 'CC', savings: 'SAV', loc: 'LOC' }
 const acctShort = a => ACCT_SHORT[a] ?? a.toUpperCase().slice(0, 4)
 
+// Format YYYY-MM-DD → "Oct 31" for badge tooltips
+const fmtDate = iso => {
+  if (!iso) return '?'
+  const [y, m, d] = iso.split('-')
+  const mon = new Date(Number(y), Number(m) - 1).toLocaleString('en-CA', { month: 'short' })
+  return `${mon} ${Number(d)}`
+}
+
 function AccountBadges({ accounts }) {
   if (!accounts?.length) return null
   return (
@@ -41,7 +49,11 @@ function AccountBadges({ accounts }) {
       {accounts.map(a => (
         <span
           key={a.account}
-          title={`${a.statement_start} → ${a.statement_end}`}
+          title={
+            a.statement_start && a.statement_end
+              ? `${fmtDate(a.statement_start)} → ${fmtDate(a.statement_end)}`
+              : a.account
+          }
           style={{
             fontSize: 10,
             fontFamily: 'var(--font-mono)',

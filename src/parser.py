@@ -1113,18 +1113,18 @@ def upsert_spending_periods(
 ) -> None:
     """
     Ensure every calendar month touched by these transaction rows exists in
-    spending_periods with the correct is_complete flag.
+    spending_periods, then update covers_month on every account_balances row.
 
-    Completeness logic:
-    - PDF with extracted dates: a month is complete if stmt_end >= last day of
-      that calendar month (the statement fully covers it).
-      Example: Jan 30 – Feb 27 statement → Jan complete (Feb 27 > Jan 31),
-               Feb partial (Feb 27 < Feb 28).
-    - CSV / no dates: complete if the calendar month has already ended
-      (safe assumption for historical imports).
+    covers_month logic (stored on account_balances, not spending_periods):
+      For each (account, statement_month) row in account_balances, covers_month=1
+      if ANY statement for that account has stmt_start <= last_day AND
+      stmt_end >= last_day of that calendar month.
 
-    Uses INSERT OR IGNORE so pre-seeded rows keep their is_baseline value.
-    A month already marked complete is never downgraded — only upgraded.
+      This handles the rolling-statement case: e.g. the Dec statement starts
+      Nov 28 — importing Dec sets covers_month=1 on the Nov chequing row because
+      Dec stmt_start (Nov 28) ≤ Nov 30 and Dec stmt_end (Dec 31) ≥ Nov 30.
+
+    Uses INSERT OR IGNORE so pre-seeded spending_periods rows keep is_baseline.
 
     Args:
         rows:       normalised transaction dicts with a 'date' key (YYYY-MM-DD).
@@ -1132,9 +1132,6 @@ def upsert_spending_periods(
         stmt_end:   official statement end date (YYYY-MM-DD), or None.
     """
     import calendar as _cal
-    from datetime import date as _date
-
-    today = _date.today()
 
     months_seen: set[str] = set()
     for row in rows:
@@ -1142,33 +1139,49 @@ def upsert_spending_periods(
         if date_str and len(date_str) >= 7:
             months_seen.add(date_str[:7])  # 'YYYY-MM'
 
+    # Seed any new months into spending_periods
     for label in months_seen:
         year, month = int(label[:4]), int(label[5:7])
-        last_day = _cal.monthrange(year, month)[1]
-        last_day_str = f"{year}-{month:02d}-{last_day:02d}"
-
-        if stmt_end is not None:
-            # Statement date available (PDF): complete iff statement covers month end
-            is_complete = 1 if stmt_end >= last_day_str else 0
-        else:
-            # CSV or unknown source: complete if calendar month has fully passed
-            is_complete = 1 if last_day_str < today.isoformat() else 0
-
         conn.execute(
             """
             INSERT OR IGNORE INTO spending_periods
-                (period_label, year, month, is_baseline, is_complete)
-            VALUES (?, ?, ?, 1, ?)
+                (period_label, year, month, is_baseline)
+            VALUES (?, ?, ?, 1)
             """,
-            (label, year, month, is_complete),
+            (label, year, month),
         )
-        # Only upgrade completeness — never downgrade a month a full statement
-        # already marked complete (e.g. a partial re-import must not clobber it).
-        if is_complete:
-            conn.execute(
-                "UPDATE spending_periods SET is_complete = 1 WHERE period_label = ?",
-                (label,),
-            )
+
+    conn.commit()
+
+    # Update covers_month on every account_balances row.
+    # For each (account, statement_month) pair, covers_month = 1 if any
+    # statement for that account covers the last day of statement_month.
+    acct_months = conn.execute(
+        "SELECT account, statement_month FROM account_balances"
+    ).fetchall()
+
+    for account, statement_month in acct_months:
+        y, m = int(statement_month[:4]), int(statement_month[5:7])
+        last_day_str = f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}"
+
+        covering = conn.execute(
+            """
+            SELECT 1 FROM account_balances
+            WHERE account = ?
+              AND statement_start IS NOT NULL
+              AND statement_end   IS NOT NULL
+              AND statement_start <= ?
+              AND statement_end   >= ?
+            LIMIT 1
+            """,
+            (account, last_day_str, last_day_str),
+        ).fetchone()
+
+        conn.execute(
+            "UPDATE account_balances SET covers_month = ? "
+            "WHERE account = ? AND statement_month = ?",
+            (1 if covering else 0, account, statement_month),
+        )
 
     conn.commit()
 

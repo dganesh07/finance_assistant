@@ -505,14 +505,10 @@ def get_monthly(months: int = 6):
         one_time_out = sum(r["total"] for r in one_time_rows)
         total_out    = regular_out + one_time_out
 
-        # Per-account statement coverage for this month.
-        # Each entry tells the UI which accounts have been imported and whether
-        # their statement fully covers the calendar month.
-        import calendar as _cal
-        last_day_str = f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}"
-
+        # Per-account statement coverage — read directly from account_balances.
+        # covers_month is computed and stored by the parser (upsert_spending_periods).
         acct_rows = conn.execute("""
-            SELECT account, statement_start, statement_end
+            SELECT account, statement_start, statement_end, covers_month
             FROM account_balances
             WHERE statement_month = ?
             ORDER BY account
@@ -523,9 +519,7 @@ def get_monthly(months: int = 6):
                 "account":         r["account"],
                 "statement_start": r["statement_start"],
                 "statement_end":   r["statement_end"],
-                "covers_month":    bool(
-                    r["statement_end"] and r["statement_end"] >= last_day_str
-                ),
+                "covers_month":    bool(r["covers_month"]),
             }
             for r in acct_rows
         ]
@@ -633,7 +627,7 @@ def get_spending_periods():
     conn = get_conn()
 
     periods = conn.execute("""
-        SELECT period_label, is_complete, is_baseline
+        SELECT period_label, is_baseline
         FROM spending_periods
         ORDER BY period_label DESC
     """).fetchall()
@@ -641,11 +635,9 @@ def get_spending_periods():
     result = []
     for period in periods:
         month = period["period_label"]
-        y, m  = map(int, month.split("-"))
-        last_day_str = f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}"
 
         acct_rows = conn.execute("""
-            SELECT account, statement_start, statement_end
+            SELECT account, statement_start, statement_end, covers_month
             FROM account_balances
             WHERE statement_month = ?
             ORDER BY account
@@ -659,10 +651,7 @@ def get_spending_periods():
                     "account":         r["account"],
                     "statement_start": r["statement_start"],
                     "statement_end":   r["statement_end"],
-                    # true only if the statement's end date covers the last day
-                    "covers_month":    bool(
-                        r["statement_end"] and r["statement_end"] >= last_day_str
-                    ),
+                    "covers_month":    bool(r["covers_month"]),
                 }
                 for r in acct_rows
             ],

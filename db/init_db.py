@@ -41,6 +41,7 @@ def initialize_db() -> None:
         "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
         "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
         "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
+        "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
