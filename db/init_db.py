@@ -39,6 +39,8 @@ def initialize_db() -> None:
     migrations = [
         "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
         "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
+        "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
+        "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
     ]
     for sql in migrations:
         try:

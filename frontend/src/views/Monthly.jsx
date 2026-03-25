@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, Cell,
+} from 'recharts'
 import { api } from '../api.js'
 import styles from './Monthly.module.css'
 
@@ -26,12 +30,42 @@ const pctChange = (prev, curr) => {
 
 // ── Month summary card ──────────────────────────────────────────────────────────
 
+// Short account label for badges: 'chequing' → 'CHQ', 'creditcard' → 'CC', etc.
+const ACCT_SHORT = { chequing: 'CHQ', creditcard: 'CC', savings: 'SAV', loc: 'LOC' }
+const acctShort = a => ACCT_SHORT[a] ?? a.toUpperCase().slice(0, 4)
+
+function AccountBadges({ accounts }) {
+  if (!accounts?.length) return null
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+      {accounts.map(a => (
+        <span
+          key={a.account}
+          title={`${a.statement_start} → ${a.statement_end}`}
+          style={{
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            padding: '1px 5px',
+            borderRadius: 3,
+            background: a.covers_month ? '#1a3a1a' : '#2a2010',
+            color:      a.covers_month ? '#4ade80'  : '#f59e0b',
+            border:    `1px solid ${a.covers_month ? '#4ade8033' : '#f59e0b33'}`,
+          }}
+        >
+          {acctShort(a.account)} {a.covers_month ? '✓' : '~'}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function MonthCard({ month, isLatest }) {
   const netPositive = month.net >= 0
   const hasOneTime  = month.one_time_out > 0
   return (
     <div className={`${styles.monthCard} ${isLatest ? styles.monthCardLatest : ''}`}>
       <div className={styles.monthCardTitle}>{MONTH_LABEL(month.label)}</div>
+      <AccountBadges accounts={month.accounts_covered} />
 
       {/* Regular spend */}
       <div className={styles.monthCardRow}>
@@ -204,6 +238,115 @@ function CategoryTable({ months }) {
   )
 }
 
+// ── Subcategory drill-down chart ────────────────────────────────────────────────
+// TODO: move this panel into the month reporter / drill-down view once that
+//       exists.  For now it lives here as a read-only panel — pick a month,
+//       see every subcategory broken out as a bar, coloured by parent category.
+
+const CAT_COLORS = {
+  food: '#f59e0b', groceries: '#4ade80', transport: '#60a5fa',
+  subscriptions: '#c084fc', shopping: '#f87171', health: '#34d399',
+  utilities: '#fb923c', rent: '#e879f9', entertainment: '#a78bfa',
+  self_care: '#f472b6', travel: '#38bdf8', cannabis: '#86efac',
+  investment: '#6ee7b7', atm: '#fbbf24', fees: '#94a3b8',
+  income: '#4ade80', transfer: '#64748b', other: '#475569',
+}
+const catColor = c => CAT_COLORS[c] ?? '#60a5fa'
+
+function SubcatTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{
+      background: '#1a1a1a', border: '1px solid #333', borderRadius: 6,
+      padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12,
+    }}>
+      <div style={{ color: catColor(d.category), marginBottom: 2 }}>{d.category}</div>
+      <div style={{ color: '#e2e8f0' }}>{d.subcategory ?? '(uncategorised)'}</div>
+      <div style={{ color: '#94a3b8' }}>${d.total.toFixed(2)} · {d.count} txns</div>
+    </div>
+  )
+}
+
+function SubcategoryChart({ months }) {
+  const latestMonth = months[0]?.label  // months are newest-first from API
+  const [selectedMonth, setSelectedMonth] = useState(latestMonth)
+  const [subcats, setSubcats]             = useState([])
+  const [loading, setLoading]             = useState(false)
+
+  // keep selectedMonth in sync when months data changes
+  useEffect(() => {
+    if (latestMonth && !selectedMonth) setSelectedMonth(latestMonth)
+  }, [latestMonth])
+
+  useEffect(() => {
+    if (!selectedMonth) return
+    setLoading(true)
+    api.getMonthlySubcats(selectedMonth)
+      .then(rows => {
+        // keep only rows that have a subcategory assigned
+        setSubcats(rows.filter(r => r.subcategory))
+      })
+      .finally(() => setLoading(false))
+  }, [selectedMonth])
+
+  if (!latestMonth) return null
+
+  // sort by total desc for a tidy chart
+  const chartData = [...subcats].sort((a, b) => b.total - a.total)
+
+  return (
+    <div>
+      {/* month picker */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{ color: 'var(--subtle)', fontSize: 11 }}>month</span>
+        <select
+          value={selectedMonth}
+          onChange={e => setSelectedMonth(e.target.value)}
+          style={{ fontSize: 12, background: '#1a1a1a', color: '#e2e8f0', border: '1px solid #333', borderRadius: 4, padding: '2px 6px' }}
+        >
+          {months.map(mo => (
+            <option key={mo.label} value={mo.label}>{MONTH_LABEL(mo.label)}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <p style={{ color: 'var(--subtle)', fontSize: 12 }}>Loading…</p>
+      ) : chartData.length === 0 ? (
+        <p style={{ color: 'var(--subtle)', fontSize: 12 }}>
+          No subcategories assigned for this month yet — run AI or add correction rules.
+        </p>
+      ) : (
+        <ResponsiveContainer width="100%" height={chartData.length * 28 + 20}>
+          <BarChart
+            data={chartData}
+            layout="vertical"
+            margin={{ top: 0, right: 16, left: 0, bottom: 0 }}
+          >
+            <XAxis type="number" hide />
+            <YAxis
+              type="category"
+              dataKey="subcategory"
+              width={130}
+              tick={{ fill: 'var(--subtle)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip content={<SubcatTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+            <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+              {chartData.map((entry, i) => (
+                <Cell key={i} fill={catColor(entry.category)} fillOpacity={0.85} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
+
+
 // ── One-time charges section ───────────────────────────────────────────────────
 
 function OneTimeSection({ months }) {
@@ -325,6 +468,16 @@ export default function Monthly() {
               <span className={styles.panelNote}>excludes one-time · matches burn rate</span>
             </div>
             <CategoryTable months={months} />
+          </div>
+
+          {/* ── Subcategory breakdown chart ── */}
+          {/* TODO: move into month reporter drill-down once that view exists */}
+          <div className={styles.panel}>
+            <div className={styles.panelTitle}>
+              Subcategory breakdown
+              <span className={styles.panelNote}>assigned subcategories only · bars coloured by parent category</span>
+            </div>
+            <SubcategoryChart months={months} />
           </div>
 
           {/* ── One-time charges section ── */}

@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS account_balances (
     statement_month TEXT    NOT NULL,          -- 'YYYY-MM' — the statement period end month
     opening_balance REAL,                      -- balance at the start of the statement period
     closing_balance REAL,                      -- balance at the end of the statement period
+    statement_start TEXT,                      -- official start date of the statement period (YYYY-MM-DD)
+    statement_end   TEXT,                      -- official end date of the statement period (YYYY-MM-DD)
     source_file     TEXT,                      -- which statement filename this was read from
     captured_at     TEXT    DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account, statement_month)           -- one balance row per account per month; re-parse updates it

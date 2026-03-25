@@ -25,8 +25,10 @@ const patch = (url, body) =>
 
 export const api = {
   // Summary + stats
-  getSummary:  (days = 60)    => get(`/api/summary?days=${days}`),
-  getMonthly:  (months = 12)  => get(`/api/monthly?months=${months}`),
+  getSummary:            (days = 60)    => get(`/api/summary?days=${days}`),
+  getMonthly:            (months = 12)  => get(`/api/monthly?months=${months}`),
+  getMonthlySubcats:     (month)        => get(`/api/monthly-subcategories?month=${month}`),
+  getSpendingPeriods:    ()             => get('/api/spending-periods'),
 
   // Categories + subcategories (from config.py)
   getCategories:    () => get('/api/categories'),

@@ -5,21 +5,26 @@ Run:
   uvicorn api:app --reload --port 8000
 
 Endpoints:
-  GET  /api/summary                  — spending summary + runway
-  GET  /api/transactions             — all transactions (filterable)
-  GET  /api/transactions/review      — unconfirmed transactions only
-  PATCH /api/transactions/{id}       — update category / confirm a row
-  POST /api/transactions/confirm-all — confirm multiple transactions by IDs
-  GET  /api/bills                    — bills from bills.json
-  POST /api/apply-corrections        — apply corrections.json to all unknowns (fast, no LLM)
-  POST /api/run-categorizer          — trigger Ollama categorizer in background
-  GET  /api/job/{job_id}             — poll background job status
-  GET  /api/categories               — full category list from config
-  POST /api/parse-statements         — scan statements folder, save raw rows to DB
-  GET  /api/statements               — list files in data/statements/
-  GET  /api/corrections              — view all rules in corrections.json
-  POST /api/corrections              — add/update a correction rule
-  DELETE /api/corrections/{key}      — remove a correction rule
+  GET  /api/summary                       — spending summary + runway
+  GET  /api/transactions                  — all transactions (filterable)
+  GET  /api/transactions/review           — unconfirmed transactions only
+  PATCH /api/transactions/{id}            — update category / confirm a row
+  POST /api/transactions/confirm-all      — confirm multiple transactions by IDs
+  GET  /api/bills                         — bills from bills.json
+  POST /api/apply-corrections             — apply corrections.json to all unknowns (fast, no LLM)
+  POST /api/run-categorizer               — trigger Ollama categorizer in background
+  GET  /api/job/{job_id}                  — poll background job status
+  GET  /api/categories                    — full category list from config
+  GET  /api/subcategories                 — subcategory map { category: [subcategory, ...] }
+  GET  /api/monthly                       — per-month breakdown with completeness flags
+  GET  /api/monthly-subcategories?month=  — subcategory drill-down for a specific month
+  GET  /api/spending-periods              — all months with is_complete + statement date ranges
+  POST /api/parse-statements              — scan statements folder, save raw rows to DB
+  GET  /api/statements                    — list files in data/statements/
+  GET  /api/corrections                   — view all rules in corrections.json
+  POST /api/corrections                   — add/update a correction rule
+  DELETE /api/corrections/{key}           — remove a correction rule
+  GET  /api/context                       — full LLM-ready financial context block
 """
 
 import json
@@ -500,8 +505,34 @@ def get_monthly(months: int = 6):
         one_time_out = sum(r["total"] for r in one_time_rows)
         total_out    = regular_out + one_time_out
 
+        # Per-account statement coverage for this month.
+        # Each entry tells the UI which accounts have been imported and whether
+        # their statement fully covers the calendar month.
+        import calendar as _cal
+        last_day_str = f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}"
+
+        acct_rows = conn.execute("""
+            SELECT account, statement_start, statement_end
+            FROM account_balances
+            WHERE statement_month = ?
+            ORDER BY account
+        """, (month,)).fetchall()
+
+        accounts_covered = [
+            {
+                "account":         r["account"],
+                "statement_start": r["statement_start"],
+                "statement_end":   r["statement_end"],
+                "covers_month":    bool(
+                    r["statement_end"] and r["statement_end"] >= last_day_str
+                ),
+            }
+            for r in acct_rows
+        ]
+
         result.append({
-            "label":        month,
+            "label":            month,
+            "accounts_covered": accounts_covered,
             "total_out":    round(total_out,    2),
             "regular_out":  round(regular_out,  2),
             "one_time_out": round(one_time_out, 2),
@@ -521,6 +552,124 @@ def get_monthly(months: int = 6):
 
     conn.close()
     return {"months": result}
+
+
+# ── GET /api/monthly-subcategories ─────────────────────────────────────────────
+
+@app.get("/api/monthly-subcategories")
+def get_monthly_subcategories(month: str):
+    """
+    Subcategory breakdown for a specific calendar month (YYYY-MM).
+
+    Returns a flat list of { category, subcategory, total, count } covering all
+    debits in that month, excluding transfer/fees/investment.  subcategory is
+    null for transactions that have no subcategory assigned.
+
+    Designed for drill-down charts: group by category on the frontend, then
+    expand to subcategory on click.  Also included in the report agent context.
+    """
+    try:
+        y, m = map(int, month.split("-"))
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "month must be YYYY-MM")
+
+    m_start = f"{month}-01"
+    m_end   = f"{y}-{m+1:02d}-01" if m < 12 else f"{y+1}-01-01"
+
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT category,
+               subcategory,
+               COALESCE(SUM(amount), 0) AS total,
+               COUNT(*) AS count
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit'
+          AND category NOT IN ('transfer', 'fees', 'investment')
+        GROUP BY category, subcategory
+        ORDER BY category, total DESC
+    """, (m_start, m_end)).fetchall()
+    conn.close()
+
+    return [
+        {
+            "category":    r["category"],
+            "subcategory": r["subcategory"],   # may be None
+            "total":       round(r["total"], 2),
+            "count":       r["count"],
+        }
+        for r in rows
+    ]
+
+
+# ── GET /api/spending-periods ──────────────────────────────────────────────────
+
+@app.get("/api/spending-periods")
+def get_spending_periods():
+    """
+    All calendar months that have transactions, with per-account coverage detail.
+
+    Each month returns an `accounts` array — one entry per account that has a
+    statement imported for that month, with the official statement start/end dates
+    and whether that account's statement fully covers the calendar month.
+
+    The top-level `is_complete` flag (from spending_periods) is retained as a
+    fallback signal but the `accounts` array is the authoritative source for the
+    month-picker UI: show what's there, let the user judge completeness themselves.
+
+    Example response item:
+      {
+        "period_label": "2026-02",
+        "is_baseline":  1,
+        "accounts": [
+          { "account": "chequing",   "statement_start": "2026-01-30",
+            "statement_end": "2026-02-27", "covers_month": false },
+          { "account": "creditcard", "statement_start": "2026-01-28",
+            "statement_end": "2026-02-27", "covers_month": false }
+        ]
+      }
+    """
+    import calendar as _cal
+    conn = get_conn()
+
+    periods = conn.execute("""
+        SELECT period_label, is_complete, is_baseline
+        FROM spending_periods
+        ORDER BY period_label DESC
+    """).fetchall()
+
+    result = []
+    for period in periods:
+        month = period["period_label"]
+        y, m  = map(int, month.split("-"))
+        last_day_str = f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}"
+
+        acct_rows = conn.execute("""
+            SELECT account, statement_start, statement_end
+            FROM account_balances
+            WHERE statement_month = ?
+            ORDER BY account
+        """, (month,)).fetchall()
+
+        result.append({
+            "period_label": month,
+            "is_baseline":  period["is_baseline"],
+            "accounts": [
+                {
+                    "account":         r["account"],
+                    "statement_start": r["statement_start"],
+                    "statement_end":   r["statement_end"],
+                    # true only if the statement's end date covers the last day
+                    "covers_month":    bool(
+                        r["statement_end"] and r["statement_end"] >= last_day_str
+                    ),
+                }
+                for r in acct_rows
+            ],
+        })
+
+    conn.close()
+    return result
 
 
 # ── GET /api/job/{job_id} ──────────────────────────────────────────────────────

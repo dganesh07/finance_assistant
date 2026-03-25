@@ -10,7 +10,7 @@ No cloud sync, no third-party services beyond Google Sheets (optional). Everythi
 
 ```
 finance-assistant/
-├── api.py                        ← FastAPI backend (14 endpoints, port 8000)
+├── api.py                        ← FastAPI backend (20 endpoints, port 8000)
 ├── config.py                     ← all paths, categories, Google Sheets config, BURN_RATE_START
 ├── dev.sh                        ← starts backend + frontend together
 ├── run.py                        ← quick CLI entry point (DB init + parse new statements)
@@ -171,6 +171,20 @@ python scripts/add_correction.py 'NETFLIX' subscriptions
 ```
 
 Rules in `data/corrections.json` always take priority over the AI.
+
+### Browse by month with completeness info
+
+The API exposes which months are fully covered vs partial:
+
+```bash
+curl http://localhost:8000/api/spending-periods
+# Returns each month with is_complete (0/1), statement_start, statement_end
+# Used by the dashboard month picker to show "Jan 1–27 (partial)" labels
+
+curl "http://localhost:8000/api/monthly-subcategories?month=2026-01"
+# Returns subcategory breakdown for January:
+# [{ "category": "transport", "subcategory": "gas", "total": 46.31, "count": 2 }, ...]
+```
 
 ### Build the AI context block
 

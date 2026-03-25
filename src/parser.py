@@ -1087,49 +1087,55 @@ def save_account_balance(
     account: str,
     statement_month: str,
     opening: Optional[float],
-    closing: Optional[float],
-    source_file: str,
+    closing: Optional[float] = None,
+    source_file: str = "",
+    statement_start: Optional[str] = None,
+    statement_end: Optional[str] = None,
 ) -> None:
-    """
-    Upsert one row into account_balances for the given account + month.
-
-    Uses INSERT OR REPLACE so re-importing a statement refreshes the balance
-    rather than failing on the UNIQUE(account, statement_month) constraint.
-
-    Args:
-        account:         e.g. 'chequing', 'creditcard'
-        statement_month: 'YYYY-MM' derived from the last transaction date
-        opening:         opening balance from the statement (may be None for CC)
-        closing:         closing balance from the statement (may be None)
-        source_file:     statement filename for traceability
-    """
-    if opening is None and closing is None:
-        return  # nothing to save — statement didn't surface balance figures
-
+    """Persist opening/closing balance and official statement date range for an account."""
     conn.execute(
         """
         INSERT OR REPLACE INTO account_balances
-            (account, statement_month, opening_balance, closing_balance, source_file)
-        VALUES (?, ?, ?, ?, ?)
+            (account, statement_month, opening_balance, closing_balance,
+             statement_start, statement_end, source_file)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (account, statement_month, opening, closing, source_file),
+        (account, statement_month, opening, closing, statement_start, statement_end, source_file),
     )
     conn.commit()
 
 
-def upsert_spending_periods(conn: sqlite3.Connection, rows: list[dict]) -> None:
+def upsert_spending_periods(
+    conn: sqlite3.Connection,
+    rows: list[dict],
+    stmt_start: Optional[str] = None,
+    stmt_end: Optional[str] = None,
+) -> None:
     """
-    Ensure every calendar month covered by these transaction rows exists in
-    spending_periods, and mark it as complete (is_complete = 1).
+    Ensure every calendar month touched by these transaction rows exists in
+    spending_periods with the correct is_complete flag.
 
-    Uses INSERT OR IGNORE so that pre-seeded setup-period rows (is_baseline=0,
-    set by init_db) are never overwritten — only new months are inserted.
-    Then a separate UPDATE flips is_complete=1 for any month with transactions,
-    including the pre-seeded ones.
+    Completeness logic:
+    - PDF with extracted dates: a month is complete if stmt_end >= last day of
+      that calendar month (the statement fully covers it).
+      Example: Jan 30 – Feb 27 statement → Jan complete (Feb 27 > Jan 31),
+               Feb partial (Feb 27 < Feb 28).
+    - CSV / no dates: complete if the calendar month has already ended
+      (safe assumption for historical imports).
+
+    Uses INSERT OR IGNORE so pre-seeded rows keep their is_baseline value.
+    A month already marked complete is never downgraded — only upgraded.
 
     Args:
-        rows: normalised transaction dicts, each with a 'date' key (YYYY-MM-DD).
+        rows:       normalised transaction dicts with a 'date' key (YYYY-MM-DD).
+        stmt_start: official statement start date (YYYY-MM-DD), or None.
+        stmt_end:   official statement end date (YYYY-MM-DD), or None.
     """
+    import calendar as _cal
+    from datetime import date as _date
+
+    today = _date.today()
+
     months_seen: set[str] = set()
     for row in rows:
         date_str = row.get("date", "")
@@ -1138,20 +1144,31 @@ def upsert_spending_periods(conn: sqlite3.Connection, rows: list[dict]) -> None:
 
     for label in months_seen:
         year, month = int(label[:4]), int(label[5:7])
+        last_day = _cal.monthrange(year, month)[1]
+        last_day_str = f"{year}-{month:02d}-{last_day:02d}"
+
+        if stmt_end is not None:
+            # Statement date available (PDF): complete iff statement covers month end
+            is_complete = 1 if stmt_end >= last_day_str else 0
+        else:
+            # CSV or unknown source: complete if calendar month has fully passed
+            is_complete = 1 if last_day_str < today.isoformat() else 0
+
         conn.execute(
             """
             INSERT OR IGNORE INTO spending_periods
                 (period_label, year, month, is_baseline, is_complete)
-            VALUES (?, ?, ?, 1, 1)
+            VALUES (?, ?, ?, 1, ?)
             """,
-            (label, year, month),
+            (label, year, month, is_complete),
         )
-        # Always mark as complete — even for setup-period months that were
-        # pre-seeded with is_baseline=0 and is_complete=0.
-        conn.execute(
-            "UPDATE spending_periods SET is_complete = 1 WHERE period_label = ?",
-            (label,),
-        )
+        # Only upgrade completeness — never downgrade a month a full statement
+        # already marked complete (e.g. a partial re-import must not clobber it).
+        if is_complete:
+            conn.execute(
+                "UPDATE spending_periods SET is_complete = 1 WHERE period_label = ?",
+                (label,),
+            )
 
     conn.commit()
 
@@ -1175,6 +1192,86 @@ _CC_NEW_BAL_RE  = re.compile(r"NEW\s*BALANCE\s+\$?([\d,]+\.\d{2})", re.IGNORECAS
 _CHQ_START_BAL_RE  = re.compile(r"STARTINGBALANCE|STARTING\s+BALANCE", re.IGNORECASE)
 _DOLLAR_RE         = re.compile(r"\$?([\d,]+\.\d{2})")
 
+# Statement period headers — used to extract official start/end dates.
+#
+# TD chequing header (from pdfplumber text extraction, words may be concatenated):
+#   "BranchNo. Account No. JAN30/26-FEB 27/26"
+#   Date format: MMMDD/YY or MMM DD/YY separated by a dash.
+#
+# TD credit card (words concatenated by pdfplumber — no spaces between tokens):
+#   "STATEMENTPERIOD:December30,2025toJanuary27,2026"
+_CHQ_PERIOD_RE = re.compile(
+    r"([A-Z]{3}\s*\d{1,2}/\d{2})\s*-\s*([A-Z]{3}\s*\d{1,2}/\d{2})",
+    re.IGNORECASE,
+)
+_CC_PERIOD_RE = re.compile(
+    r"STATEMENT\s*PERIOD\s*:?\s*"
+    r"([A-Za-z]+\s*\d{1,2}\s*,\s*\d{4})"   # start: "December30,2025"
+    r"\s*to\s*"
+    r"([A-Za-z]+\s*\d{1,2}\s*,\s*\d{4})",  # end:   "January27,2026"
+    re.IGNORECASE,
+)
+
+# Month abbreviation → integer (used to parse TD chequing header dates)
+_MONTH_ABBR: dict[str, int] = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def _parse_td_header_date(raw: str) -> Optional[str]:
+    """
+    Parse a TD chequing header date 'MMMDD/YY' or 'MMM DD/YY' → 'YYYY-MM-DD'.
+
+    Examples:
+      'JAN30/26'  → '2026-01-30'
+      'FEB 27/26' → '2026-02-27'
+    """
+    raw = raw.strip().upper()
+    m = re.match(r"([A-Z]{3})\s*(\d{1,2})/(\d{2})$", raw)
+    if not m:
+        return None
+    month_num = _MONTH_ABBR.get(m.group(1))
+    if not month_num:
+        return None
+    day  = int(m.group(2))
+    year = 2000 + int(m.group(3))
+    try:
+        return f"{year}-{month_num:02d}-{day:02d}"
+    except (ValueError, OverflowError):
+        return None
+
+
+_CC_MONTH_NAMES: dict[str, int] = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _parse_cc_date(raw: str) -> Optional[str]:
+    """
+    Parse a TD CC statement date captured as 'MonthNameDD,YYYY' (words may be
+    concatenated by pdfplumber).
+
+    Examples:
+      'December30,2025'  → '2025-12-30'
+      'January27,2026'   → '2026-01-27'
+      'December 30, 2025' → '2025-12-30'   (spaced variant, also handled)
+    """
+    m = re.match(r"([A-Za-z]+)\s*(\d{1,2})\s*,\s*(\d{4})", raw.strip())
+    if not m:
+        return None
+    month_num = _CC_MONTH_NAMES.get(m.group(1).lower())
+    if not month_num:
+        return None
+    day  = int(m.group(2))
+    year = int(m.group(3))
+    try:
+        return f"{year}-{month_num:02d}-{day:02d}"
+    except (ValueError, OverflowError):
+        return None
+
 
 def _parse_dollar(s: str) -> Optional[float]:
     """Parse '$1,234.56' or '1234.56' → float, or None on failure."""
@@ -1183,6 +1280,45 @@ def _parse_dollar(s: str) -> Optional[float]:
         return float(s) if s else None
     except ValueError:
         return None
+
+
+def extract_statement_dates(
+    file_path: Path, account: str
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract the official statement period from a PDF header.
+
+    TD chequing:    "BranchNo. Account No. JAN30/26-FEB 27/26"
+                    (pdfplumber concatenates header words; dates in MMMDD/YY format)
+    TD credit card: "STATEMENT PERIOD Nov 30, 2025 to Dec 27, 2025"
+
+    Returns (start_iso, end_iso) as YYYY-MM-DD strings, or (None, None) on failure.
+    Only the first two pages are scanned — the header always appears early.
+    """
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages[:2]:
+                text = page.extract_text() or ""
+
+                if account == "chequing":
+                    m = _CHQ_PERIOD_RE.search(text)
+                    if m:
+                        start = _parse_td_header_date(m.group(1))
+                        end   = _parse_td_header_date(m.group(2))
+                        if start and end:
+                            return start, end
+
+                elif account == "creditcard":
+                    m = _CC_PERIOD_RE.search(text)
+                    if m:
+                        start = _parse_cc_date(m.group(1).strip())
+                        end   = _parse_cc_date(m.group(2).strip())
+                        if start and end:
+                            return start, end
+
+    except Exception as e:
+        log.debug("extract_statement_dates failed for %s: %s", file_path.name, e)
+    return None, None
 
 
 def verify_statement(file_path: Path, account: str) -> dict:
@@ -1372,11 +1508,23 @@ def parse_new_statements(
         console.print(f"[cyan]  Parsing:[/cyan] {filename}  [dim]→ account: {account}[/dim]")
 
         suffix = file_path.suffix.lower()
+        stmt_start: Optional[str] = None
+        stmt_end:   Optional[str] = None
+
         if suffix == ".csv":
             rows = parse_csv(file_path)
             parse_dropped = 0
         elif suffix == ".pdf":
             rows, parse_dropped = parse_pdf(file_path)
+            stmt_start, stmt_end = extract_statement_dates(file_path, account)
+            if stmt_start and stmt_end:
+                console.print(
+                    f"  [dim]Statement period:[/dim] {stmt_start} → {stmt_end}"
+                )
+            else:
+                console.print(
+                    f"  [yellow]⚠ Could not extract statement period dates from PDF header[/yellow]"
+                )
         else:
             continue
 
@@ -1455,12 +1603,15 @@ def parse_new_statements(
             statement_month = last_date[:7]  # 'YYYY-MM'
             opening = reconciliation.get("opening")
             closing = reconciliation.get("closing") or reconciliation.get("expected_new_bal")
-            save_account_balance(conn, account, statement_month, opening, closing, safe_filename)
+            save_account_balance(
+                conn, account, statement_month, opening, closing,
+                safe_filename, stmt_start, stmt_end,
+            )
 
-        # Register every calendar month covered by this statement so
-        # context_builder can filter by period and flag incomplete months.
+        # Register every calendar month covered by this statement so the
+        # dashboard can show completeness flags and correct date ranges.
         if rows:
-            upsert_spending_periods(conn, rows)
+            upsert_spending_periods(conn, rows, stmt_start, stmt_end)
 
         results.append({
             "file": safe_filename,

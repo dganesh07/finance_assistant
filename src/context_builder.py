@@ -219,6 +219,24 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
             ORDER BY total DESC
         """, (month_start, next_m)).fetchall()
 
+        # Subcategory breakdown — one query per month, grouped by category
+        from collections import defaultdict as _defaultdict
+        sub_rows = conn.execute(f"""
+            SELECT category, subcategory,
+                   COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE date >= ? AND date < ?
+              AND type = 'debit'
+              AND (is_one_time = 0 OR is_one_time IS NULL)
+              AND category NOT IN {_NON_SPEND_SQL}
+              AND subcategory IS NOT NULL AND subcategory != ''
+            GROUP BY category, subcategory
+            ORDER BY category, total DESC
+        """, (month_start, next_m)).fetchall()
+        sub_by_cat: dict = _defaultdict(list)
+        for s in sub_rows:
+            sub_by_cat[s["category"]].append(s)
+
         total_spend    = sum(r["total"] for r in rows)
         one_time_total = sum(r["total"] for r in one_time_rows)
         month_data[month] = {
@@ -229,6 +247,12 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
         lines.append(f"\n  {month}  —  regular spend: {_fmt(total_spend)}")
         for r in rows:
             lines.append(f"    {r['category']:<18}  {_fmt(r['total']):>10}   ({r['cnt']} txns)")
+            subs = sub_by_cat.get(r["category"], [])
+            if subs:
+                sub_str = "  |  ".join(
+                    f"{s['subcategory']} {_fmt(s['total'])}" for s in subs
+                )
+                lines.append(f"      └ {sub_str}")
         if one_time_rows:
             lines.append(f"    {'[one-time charges]':<18}  {_fmt(one_time_total):>10}   (excluded from burn rate)")
             for r in one_time_rows:
@@ -273,8 +297,29 @@ def _section_monthly_spending(conn: sqlite3.Connection) -> str:
         if mtd_rows:
             mtd_total = sum(r["total"] for r in mtd_rows)
             lines.append(f"\n  {current_label} (month-to-date, {today.day} days in)  —  spend so far: {_fmt(mtd_total)}")
+            mtd_sub_rows = conn.execute(f"""
+                SELECT category, subcategory,
+                       COALESCE(SUM(amount), 0) AS total
+                FROM transactions
+                WHERE date >= ?
+                  AND type = 'debit'
+                  AND category NOT IN {_NON_SPEND_SQL}
+                  AND subcategory IS NOT NULL AND subcategory != ''
+                GROUP BY category, subcategory
+                ORDER BY category, total DESC
+            """, (f"{current_label}-01",)).fetchall()
+            from collections import defaultdict as _defaultdict
+            mtd_sub_by_cat: dict = _defaultdict(list)
+            for s in mtd_sub_rows:
+                mtd_sub_by_cat[s["category"]].append(s)
             for r in mtd_rows:
                 lines.append(f"    {r['category']:<18}  {_fmt(r['total']):>10}   ({r['cnt']} txns)")
+                subs = mtd_sub_by_cat.get(r["category"], [])
+                if subs:
+                    sub_str = "  |  ".join(
+                        f"{s['subcategory']} {_fmt(s['total'])}" for s in subs
+                    )
+                    lines.append(f"      └ {sub_str}")
 
     return "\n".join(lines)
 
