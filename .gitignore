@@ -51,6 +51,11 @@ frontend/.env.local
 *.swo
 *~
 
+# ── Google Cloud Credentials — NEVER COMMIT ───────────────────────────────────
+# Service account key — grants read access to your Google Sheets
+google_credentials.json
+*_credentials.json
+
 # ── Misc ──────────────────────────────────────────────────────────────────────
 *.log
 .env

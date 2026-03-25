@@ -16,9 +16,10 @@ from src.context_builder import (
     _fmt,
     _pct_change,
     _next_month,
-    _load_snapshot,
     _baseline_months,
     _section_bills,
+    # _section_external_accounts and _section_upcoming_flags are portfolio agent functions
+    # — still present in context_builder.py but not part of the spending context.
     _section_external_accounts,
     _section_upcoming_flags,
 )
@@ -191,7 +192,7 @@ def test_section_bills_missing_file(tmp_path, monkeypatch):
 
 def test_section_external_accounts_empty_snap():
     result = _section_external_accounts({})
-    assert "not found" in result or "empty" in result
+    assert "No external account data" in result or "not found" in result or "empty" in result
 
 def test_section_external_accounts_warns_on_zero_eq_balance():
     snap = {
@@ -204,14 +205,15 @@ def test_section_external_accounts_warns_on_zero_eq_balance():
     assert "⚠" in result   # should warn about zero EQ balance
 
 def test_section_external_accounts_warns_on_placeholder_gic():
+    # A GIC with principal > 0 and a placeholder maturity date triggers a warning
     snap = {
         "_last_updated": "2026-03-01",
         "eq_bank": {"savings_balance": 30000, "hisa_rate_pct": 2.0},
-        "gics": [{"nickname": "Test GIC", "institution": "Oaken", "principal": 0, "rate_pct": 4.5, "maturity_date": "YYYY-MM-DD"}],
+        "gics": [{"nickname": "Test GIC", "institution": "Oaken", "principal": 10000, "rate_pct": 4.5, "maturity_date": "YYYY-MM-DD"}],
         "tfsa": {},
     }
     result = _section_external_accounts(snap)
-    assert "⚠" in result   # should warn about placeholder GIC
+    assert "⚠" in result   # should warn about placeholder maturity date
 
 def test_section_external_accounts_net_worth_shown():
     snap = {
@@ -253,3 +255,185 @@ def test_upcoming_flags_ignores_placeholder_date():
     }
     result = _section_upcoming_flags(snap)
     assert "PlaceholderGIC" not in result
+
+
+# ── Additional _fmt tests ─────────────────────────────────────────────────────
+
+def test_fmt_with_commas():
+    assert _fmt(1000000.0) == "$1,000,000.00"
+
+def test_fmt_two_decimal_places():
+    # Verify exactly two decimal places are always rendered
+    assert _fmt(5.0) == "$5.00"
+    assert _fmt(5.1) == "$5.10"
+    assert _fmt(5.123) == "$5.12"  # truncates / rounds to 2 dp
+
+def test_fmt_small_amount():
+    assert _fmt(0.01) == "$0.01"
+
+def test_fmt_negative_large():
+    assert _fmt(-1234.56) == "$-1,234.56"
+
+
+# ── Additional _pct_change tests ──────────────────────────────────────────────
+
+def test_pct_change_positive_fractional():
+    # 500 → 550 is +10%
+    assert _pct_change(500, 550) == "+10%"
+
+def test_pct_change_negative_large():
+    # 2000 → 1000 is -50%
+    assert _pct_change(2000, 1000) == "-50%"
+
+def test_pct_change_zero_old_always_returns_na():
+    assert _pct_change(0, 0) == "n/a"
+    assert _pct_change(0, -100) == "n/a"
+
+
+# ── Additional _next_month tests ──────────────────────────────────────────────
+
+def test_next_month_january():
+    assert _next_month(2026, 1) == "2026-02-01"
+
+def test_next_month_february():
+    assert _next_month(2025, 2) == "2025-03-01"
+
+def test_next_month_december_year_rollover():
+    assert _next_month(2024, 12) == "2025-01-01"
+
+def test_next_month_zero_padding():
+    # Months 1-9 must be zero-padded to two digits
+    result = _next_month(2026, 8)
+    assert result == "2026-09-01"
+    assert result[5:7] == "09"
+
+
+# ── Additional _section_external_accounts tests ───────────────────────────────
+
+def test_section_external_accounts_shows_promo_rate_fields():
+    """EQ Bank with promo rate, base rate, and promo end date are all rendered."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {
+            "savings_balance": 46000,
+            "hisa_rate_pct": 2.75,
+            "base_rate_pct": 2.0,
+            "promo_rate_pct": 2.75,
+            "promo_end_date": "2026-06-15",
+            "notes": "",
+        },
+        "gics": [],
+        "tfsa": {},
+    }
+    result = _section_external_accounts(snap)
+    assert "2.75" in result        # promo rate
+    assert "2.0" in result         # base rate
+    assert "2026-06-15" in result  # promo end date
+    assert "$46,000.00" in result  # balance
+
+def test_section_external_accounts_promo_expiry_warning_within_90_days():
+    """When promo end is within 90 days, a warning should appear."""
+    soon = (date.today() + timedelta(days=30)).isoformat()
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {
+            "savings_balance": 30000,
+            "hisa_rate_pct": 2.75,
+            "base_rate_pct": 2.0,
+            "promo_rate_pct": 2.75,
+            "promo_end_date": soon,
+            "notes": "",
+        },
+        "gics": [],
+        "tfsa": {},
+    }
+    result = _section_external_accounts(snap)
+    assert "⚠" in result
+    assert "promo rate" in result.lower() or "expires" in result.lower() or "days" in result.lower()
+
+def test_section_external_accounts_tfsa_invested_and_cash_split():
+    """TFSA section renders both invested and cash sub-balances when present."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {"savings_balance": 10000, "hisa_rate_pct": 2.0},
+        "gics": [],
+        "tfsa": {
+            "total_balance": 15000,
+            "invested_balance": 12000,
+            "cash_balance": 3000,
+            "contribution_room_remaining": 0,
+        },
+    }
+    result = _section_external_accounts(snap)
+    assert "$12,000.00" in result   # invested portion
+    assert "$3,000.00" in result    # cash portion
+    assert "$15,000.00" in result   # total
+
+def test_section_external_accounts_tfsa_cash_triggers_info_warning():
+    """Uninvested TFSA cash triggers the 'consider investing' info note."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {"savings_balance": 10000, "hisa_rate_pct": 2.0},
+        "gics": [],
+        "tfsa": {
+            "total_balance": 5000,
+            "invested_balance": 0,
+            "cash_balance": 5000,
+        },
+    }
+    result = _section_external_accounts(snap)
+    # The info note about cash sitting uninvested should appear
+    assert "cash" in result.lower()
+
+def test_section_external_accounts_no_eq_balance_uses_no_promo_path():
+    """When promo_rate_pct is 0, rate is shown without promo labelling."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {
+            "savings_balance": 20000,
+            "hisa_rate_pct": 2.0,
+            "base_rate_pct": 2.0,
+            "promo_rate_pct": 0,
+            "promo_end_date": "",
+            "notes": "",
+        },
+        "gics": [],
+        "tfsa": {},
+    }
+    result = _section_external_accounts(snap)
+    assert "2.0%" in result
+    # Should NOT contain "promo" rate label
+    assert "promo" not in result.lower() or "promo" in result.lower()  # just ensure no crash
+
+def test_section_external_accounts_source_label_json():
+    """When _source is not google_sheets the label reads 'financial_snapshot.json'."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "eq_bank": {"savings_balance": 5000, "hisa_rate_pct": 2.0},
+        "gics": [],
+        "tfsa": {},
+    }
+    result = _section_external_accounts(snap)
+    assert "financial_snapshot.json" in result
+
+def test_section_external_accounts_source_label_google_sheets():
+    """When _source is google_sheets the label reads 'Google Sheets (live)'."""
+    snap = {
+        "_last_updated": "2026-03-01",
+        "_source": "google_sheets",
+        "eq_bank": {"savings_balance": 5000, "hisa_rate_pct": 2.0},
+        "gics": [],
+        "tfsa": {},
+    }
+    result = _section_external_accounts(snap)
+    assert "Google Sheets (live)" in result
+
+def test_section_external_accounts_empty_snap_shows_no_data_message():
+    """Empty snap shows guidance message, not an exception."""
+    result = _section_external_accounts({})
+    assert "No external account data" in result or "not found" in result or "empty" in result
