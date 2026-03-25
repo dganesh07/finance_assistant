@@ -175,7 +175,7 @@ def _is_td_headerless(file_path: Path) -> bool:
         first_cell = first_line.split(",")[0].strip().strip('"')
         # If the first cell parses as a date, there's no header row
         return normalise_date(first_cell) is not None
-    except Exception:
+    except OSError:
         return False
 
 
@@ -200,7 +200,7 @@ def parse_csv(file_path: Path) -> list[dict]:
             sample = f.read(4096)
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
         sep = dialect.delimiter
-    except Exception:
+    except csv.Error:
         sep = ","
 
     # TD headerless format: no column row, fixed 5-column order
@@ -990,7 +990,10 @@ def _load_corrections_for_parser() -> dict:
     try:
         raw = json.loads(CORRECTIONS_FILE.read_text(encoding="utf-8"))
         return {k.upper(): v for k, v in raw.items() if not k.startswith("_")}
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        log.warning("corrections.json is malformed — skipping: %s", exc)
         return {}
 
 
@@ -1477,14 +1480,11 @@ def parse_new_statements(
 
 # ── --test mode ───────────────────────────────────────────────────────────────
 
-def run_test():
+def run_test() -> None:
     """
     Create a temp CSV with 5 known transactions, parse it, print results.
     Run a second time to confirm dedup (0 inserted).
     """
-    import tempfile
-    import os
-
     console.rule("[bold cyan]Parser self-test[/bold cyan]")
 
     test_csv_content = """Date,Description,Debit,Credit

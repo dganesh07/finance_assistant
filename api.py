@@ -50,6 +50,7 @@ app.add_middleware(
 # ── DB helper ──────────────────────────────────────────────────────────────────
 
 def get_conn() -> sqlite3.Connection:
+    """Open a SQLite connection to DB_PATH with Row factory enabled."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -78,7 +79,6 @@ class CorrectionRule(BaseModel):
 
 class ConfirmAllRequest(BaseModel):
     ids: list[int]
-
 
 
 # ── /api/categories ────────────────────────────────────────────────────────────
@@ -199,6 +199,7 @@ def get_transactions(
     limit:       int = 100,
     offset:      int = 0,
 ):
+    """All transactions with optional filters. Returns total count and paginated rows."""
     conn = get_conn()
 
     clauses, params = [], []
@@ -244,6 +245,7 @@ def get_transactions(
 
 @app.patch("/api/transactions/{txn_id}")
 def update_transaction(txn_id: int, body: TransactionUpdate):
+    """Update category, subcategory, confirmed, is_one_time, or notes on a single transaction."""
     # "unknown" is a valid DB placeholder (uncategorized), not user-selectable
     # but should never trigger a 400 when confirming without changing category.
     _ALLOWED = set(CATEGORIES) | {"unknown"}
@@ -284,6 +286,7 @@ def update_transaction(txn_id: int, body: TransactionUpdate):
 
 @app.post("/api/transactions/confirm-all")
 def confirm_all(body: ConfirmAllRequest):
+    """Bulk-confirm a list of transaction IDs (set confirmed=1)."""
     if not body.ids:
         return {"updated": 0}
     conn = get_conn()
@@ -341,6 +344,7 @@ def _run_categorizer_job(job_id: str) -> None:
 
 @app.post("/api/run-categorizer")
 def run_categorizer(background_tasks: BackgroundTasks):
+    """Kick off a background Ollama categorization job for all unknown transactions."""
     job_id = str(uuid.uuid4())[:8]
     background_tasks.add_task(_run_categorizer_job, job_id)
     return {"job_id": job_id, "status": "started"}
@@ -617,6 +621,7 @@ def get_context():
 # is used for applying rules. These helpers are for reading/writing the raw file.
 
 def _read_corrections_file() -> dict:
+    """Return the parsed contents of corrections.json, or {} if the file is missing."""
     try:
         return json.loads(CORRECTIONS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -624,6 +629,7 @@ def _read_corrections_file() -> dict:
 
 
 def _write_corrections_file(data: dict) -> None:
+    """Serialise data to corrections.json with 2-space indent."""
     CORRECTIONS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -647,7 +653,7 @@ def add_correction(rule: CorrectionRule):
 
 
 @app.delete("/api/corrections/{key}")
-def delete_correction(key: str):
+def delete_correction(key: str) -> dict:
     """Remove a correction rule by key."""
     raw = _read_corrections_file()
     upper = key.upper()

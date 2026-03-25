@@ -113,6 +113,10 @@ def print_db_tables() -> None:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """
+    Entry point: initialize the DB, display bills, confirm DB tables exist,
+    then parse any new statement files found in data/statements/.
+    """
     console.print()
     console.print(Panel(
         Text("FINANCE AGENT", justify="center", style="bold green"),

@@ -16,6 +16,20 @@ CORRECTIONS_FILE = BASE_DIR / "data" / "corrections.json"
 PROFILE_FILE     = BASE_DIR / "profile.txt"
 SCHEMA_FILE      = BASE_DIR / "db" / "schema.sql"
 
+# ── Google Sheets integration ──────────────────────────────────────────────────
+# GOOGLE_SHEET_ID is set in config.local.py (git-ignored) — never commit your sheet ID.
+# Copy config.local.example.py → config.local.py and fill in your sheet ID.
+# Leave GOOGLE_SHEET_ID as "" here; it will be overridden by config.local.py if present.
+GOOGLE_SHEET_ID     = ""
+GOOGLE_CREDS_FILE   = BASE_DIR / "google_credentials.json"
+GOOGLE_ACCOUNTS_TAB = "Accounts"   # sheet tab name — change if your tab is named differently
+
+# Load local overrides (git-ignored) — this is where your personal sheet ID lives
+try:
+    from config_local import *  # noqa: F401, F403
+except ImportError:
+    pass
+
 # ── Burn rate baseline ─────────────────────────────────────────────────────────
 # Only months on or after this date are used to calculate average monthly spend
 # and runway.  Months before this are still in the DB and visible in charts —

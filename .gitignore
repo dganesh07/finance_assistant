@@ -56,6 +56,10 @@ frontend/.env.local
 google_credentials.json
 *_credentials.json
 
+# ── Local config overrides — NEVER COMMIT ─────────────────────────────────────
+# Personal values like Google Sheet ID live here, not in config.py
+config_local.py
+
 # ── Misc ──────────────────────────────────────────────────────────────────────
 *.log
 .env

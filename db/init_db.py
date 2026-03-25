@@ -43,8 +43,8 @@ def initialize_db() -> None:
     for sql in migrations:
         try:
             conn.execute(sql)
-        except Exception:
-            pass  # column already exists
+        except sqlite3.OperationalError:
+            pass  # column already exists — safe to ignore
 
     # Note: burn rate baseline cutoff is configured in config.py (BURN_RATE_START),
     # not here. init_db is pure infrastructure — no personal context belongs here.
