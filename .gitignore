@@ -13,9 +13,6 @@ data/
 # Your personal financial profile (use profile.example.txt as the committed template)
 profile.txt
 
-# External accounts snapshot — EQ Bank, GICs, TFSA balances (use financial_snapshot.example.json as template)
-financial_snapshot.json
-
 # Bills — real personal amounts and due dates
 bills.local.json
 *.local.json        # catch-all for any future *.local.json config files

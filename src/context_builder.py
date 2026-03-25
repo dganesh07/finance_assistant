@@ -2,21 +2,15 @@
 src/context_builder.py — Assembles DB data + profile into AI-ready spending context.
 
 This is the SPENDING AGENT context — focused purely on TD Bank transactions.
-It does NOT include external accounts (EQ Bank, TFSA, investments).
-External accounts are handled by sheets_connector.py for a future portfolio agent.
+External accounts (EQ Bank, TFSA, investments) belong to the portfolio agent
+(not yet built) and are handled by sheets_connector.py when that is wired up.
 
-Data sources used here:
+Data sources:
   1. SQLite (transactions, account_balances)
-  2. profile.txt — 3 key sections only: life timeline, income note, AI behaviour
+  2. profile.txt — 3 key sections: life timeline, income note, AI behaviour
   3. bills.local.json (recurring fixed obligations)
 
-Disconnected (portfolio agent — not yet built):
-  - financial_snapshot.json
-  - Google Sheets / sheets_connector.py
-
-Call build_context() to get a formatted string ready to inject into any LLM prompt.
-
-To see the output directly:
+To see the output:
   python -m src.context_builder
   GET /api/context
 """
@@ -27,8 +21,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from config import BILLS_FILE, BURN_RATE_START, DB_PATH, PROFILE_FILE
-
-BASE_DIR = Path(__file__).parent.parent
 
 # Categories excluded from spending totals — money movements, not discretionary spend
 _NON_SPEND = {"transfer", "fees", "investment", "income"}
@@ -60,28 +52,9 @@ def _pct_change(old: float, new: float) -> str:
 
 
 # ── PORTFOLIO AGENT (not yet built) ───────────────────────────────────────────
-# _load_snapshot() is disconnected from the spending context.
-# It will be re-wired when the portfolio agent is built.
-# sheets_connector.py and financial_snapshot.json are still available.
-#
-# def _load_snapshot() -> dict:
-#     """Load external accounts from Google Sheets or financial_snapshot.json."""
-#     from config import GOOGLE_SHEET_ID, GOOGLE_CREDS_FILE, GOOGLE_ACCOUNTS_TAB
-#     if GOOGLE_SHEET_ID and GOOGLE_CREDS_FILE.exists():
-#         try:
-#             from src.sheets_connector import load_from_sheets
-#             data = load_from_sheets(GOOGLE_SHEET_ID, GOOGLE_CREDS_FILE, GOOGLE_ACCOUNTS_TAB)
-#             if data:
-#                 return data
-#         except Exception as exc:
-#             print(f"[context_builder] Sheets connector failed ({exc}), falling back to JSON")
-#     snapshot_file = BASE_DIR / "financial_snapshot.json"
-#     if not snapshot_file.exists():
-#         return {}
-#     try:
-#         return json.loads(snapshot_file.read_text(encoding="utf-8"))
-#     except json.JSONDecodeError:
-#         return {}
+# When the portfolio agent is built, wire in sheets_connector.py here to load
+# live account balances (EQ Bank, TFSA, other accounts) from Google Sheets.
+# See src/sheets_connector.py and config.py (GOOGLE_SHEET_ID).
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -389,13 +362,11 @@ def _section_bills() -> str:
 
 def _section_external_accounts(snap: dict) -> str:  # noqa: C901
     source = snap.get("_source", "json")
-    source_label = "Google Sheets (live)" if source == "google_sheets" else "financial_snapshot.json"
+    source_label = "Google Sheets (live)" if source == "google_sheets" else "unknown source"
     lines = [f"EXTERNAL ACCOUNTS ({source_label})", "─" * 60]
 
     if not snap:
-        lines.append("  [No external account data available]")
-        lines.append("  Either configure Google Sheets (GOOGLE_SHEET_ID in config.py)")
-        lines.append("  or copy financial_snapshot.example.json → financial_snapshot.json and fill in.")
+        lines.append("  [No external account data — configure Google Sheets (GOOGLE_SHEET_ID in config_local.py)]")
         return "\n".join(lines)
 
     warnings = []
@@ -403,8 +374,6 @@ def _section_external_accounts(snap: dict) -> str:  # noqa: C901
 
     last_updated = snap.get("_last_updated", "unknown")
     lines.append(f"  Last updated: {last_updated}")
-    if source != "google_sheets" and last_updated in ("unknown", "YYYY-MM-DD", ""):
-        warnings.append("  ⚠  _last_updated is not set in financial_snapshot.json")
 
     # ── EQ Bank HISA ──────────────────────────────────────────────────────────
     eq = snap.get("eq_bank", {})

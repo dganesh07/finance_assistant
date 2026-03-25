@@ -411,7 +411,7 @@ def test_section_external_accounts_no_eq_balance_uses_no_promo_path():
     assert "promo" not in result.lower() or "promo" in result.lower()  # just ensure no crash
 
 def test_section_external_accounts_source_label_json():
-    """When _source is not google_sheets the label reads 'financial_snapshot.json'."""
+    """When _source is not google_sheets the label reads 'unknown source'."""
     snap = {
         "_last_updated": "2026-03-01",
         "eq_bank": {"savings_balance": 5000, "hisa_rate_pct": 2.0},
@@ -419,7 +419,7 @@ def test_section_external_accounts_source_label_json():
         "tfsa": {},
     }
     result = _section_external_accounts(snap)
-    assert "financial_snapshot.json" in result
+    assert "unknown source" in result
 
 def test_section_external_accounts_source_label_google_sheets():
     """When _source is google_sheets the label reads 'Google Sheets (live)'."""

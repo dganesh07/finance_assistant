@@ -1,8 +1,8 @@
 """
 src/sheets_connector.py — Reads account data from Google Sheets.
 
-Returns a dict in the same structure as financial_snapshot.json so that
-context_builder._load_snapshot() can use either source interchangeably.
+Returns a dict with external account balances (EQ Bank, TFSA, other accounts)
+for use by the portfolio agent (not yet wired into the spending context).
 
 The Accounts tab is expected to have (at minimum) these columns:
   Account Name | Institution | Currency | Asset Class | Sub-Type |
@@ -133,9 +133,9 @@ def _is_included(row: list[str], idx: int | None) -> bool:
 
 def load_from_sheets(sheet_id: str, creds_file: Path, tab_name: str = "Accounts") -> dict[str, Any]:
     """
-    Read the Accounts tab and return a dict matching financial_snapshot.json structure.
+    Read the Accounts tab and return a dict of external account balances.
 
-    Returns empty dict on any failure so the caller can fall back to the JSON file.
+    Returns empty dict on any failure so the caller can handle gracefully.
     """
     try:
         import gspread

@@ -44,8 +44,6 @@ finance-assistant/
 ├── bills.example.json            ← template — copy to bills.local.json
 ├── profile.txt                   ← your financial context for the AI (git-ignored)
 ├── profile.example.txt           ← template — copy to profile.txt and fill in
-├── financial_snapshot.json       ← external account balances fallback (git-ignored)
-├── financial_snapshot.example.json ← template
 ├── google_credentials.json       ← Google service account key (git-ignored)
 └── finance.db                    ← SQLite database (auto-created, git-ignored)
 ```
@@ -79,17 +77,15 @@ cd frontend && npm install
 ```bash
 cp bills.example.json bills.local.json
 cp profile.example.txt profile.txt
-cp financial_snapshot.example.json financial_snapshot.json
 ```
 
 Edit each file:
 - `bills.local.json` — your recurring bills (rent, subscriptions, utilities, etc.)
 - `profile.txt` — your financial context: income range, goals, stress areas, AI behavior notes
-- `financial_snapshot.json` — external account balances (EQ Bank, GICs, TFSA) if not using Google Sheets
 
 ### 4. Google Sheets setup (optional but recommended)
 
-Google Sheets gives you live account balances in the context builder without manually editing `financial_snapshot.json`.
+External accounts (EQ Bank, TFSA) are read from Google Sheets via `sheets_connector.py` — used by the portfolio agent (coming soon).
 
 1. Create a Google Cloud service account and download the JSON credentials key.
 2. Save the key file as `google_credentials.json` in the project root.
@@ -97,7 +93,7 @@ Google Sheets gives you live account balances in the context builder without man
 4. Share the sheet with the service account email (view access only).
 5. Set `GOOGLE_SHEET_ID` in `config.py` to your sheet's ID (from the URL).
 
-If `GOOGLE_SHEET_ID` is empty or the credentials file is missing, the context builder falls back to `financial_snapshot.json` automatically.
+Set `GOOGLE_SHEET_ID` in `config.py` and place `google_credentials.json` in the project root to enable Sheets access.
 
 ### 5. Ollama
 
@@ -219,7 +215,7 @@ python -m pytest tests/ -v
 | `BILLS_FILE` | Path to `bills.local.json` |
 | `CORRECTIONS_FILE` | Path to `data/corrections.json` (merchant → category rules) |
 | `PROFILE_FILE` | Path to `profile.txt` |
-| `GOOGLE_SHEET_ID` | ID of your Google Sheet (from URL). Set to `""` to disable and use JSON fallback |
+| `GOOGLE_SHEET_ID` | ID of your Google Sheet (from URL). Set to `""` to disable Sheets integration |
 | `GOOGLE_CREDS_FILE` | Path to Google service account credentials JSON |
 | `GOOGLE_ACCOUNTS_TAB` | Name of the tab in your sheet (default: `"Accounts"`) |
 | `BURN_RATE_START` | `YYYY-MM` — earliest month included in burn rate calculations. Months before this are visible but excluded from the average (e.g. set to skip an unusually high setup period) |
@@ -240,7 +236,6 @@ The following files are git-ignored and never committed:
 | `data/statements/` | Bank statement PDFs and CSVs |
 | `bills.local.json` | Your actual bill amounts and accounts |
 | `profile.txt` | Your financial context and personal details |
-| `financial_snapshot.json` | External account balances |
 | `google_credentials.json` | Google service account private key |
 | `data/corrections.json` | Merchant names from your transactions |
 
