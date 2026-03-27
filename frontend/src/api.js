@@ -68,6 +68,12 @@ export const api = {
   parseStatements:  () => post('/api/parse-statements', {}),
   getSourceFiles:   () => get('/api/source-files'),
 
+  // Hybrid dashboard
+  getDashboard: (month) => get(`/api/dashboard${month ? `?month=${month}` : ''}`),
+
+  // AI insights (POST triggers generation)
+  postInsights: (month) => post(`/api/insights${month ? `?month=${month}` : ''}`, {}),
+
   // Correction rules
   getCorrections:    () => get('/api/corrections'),
   addCorrection:     (key, category, subcategory = null) =>

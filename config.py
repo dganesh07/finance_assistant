@@ -42,6 +42,25 @@ BURN_RATE_START = "2025-12"   # YYYY-MM  — first month of normal spending
 OLLAMA_MODEL    = "mistral:7b"   # swap to any model you have pulled
 OLLAMA_BASE_URL = "http://localhost:11434"
 
+# ── Report / Insights agent ────────────────────────────────────────────────────
+# Controls which backend powers the AI Insights panel in the dashboard.
+# Override both in config_local.py to switch models without touching this file.
+#
+#   REPORT_BACKEND = "claude"            # "ollama" (default) or "claude"
+#   REPORT_MODEL   = "claude-sonnet-4-6" # any claude model id
+#   ANTHROPIC_API_KEY = "sk-ant-..."     # only needed when backend = "claude"
+#
+# Prompt is loaded from data/prompts/insights_prompt.txt — edit freely.
+# Changing the file takes effect on the next Refresh click; no restart needed.
+REPORT_BACKEND    = "ollama"          # "ollama" | "claude"
+REPORT_MODEL      = OLLAMA_MODEL      # inherits Ollama model by default
+REPORT_PROMPT_FILE = BASE_DIR / "data" / "prompts" / "insights_prompt.txt"
+
+# ── Fixed vs Variable category split ──────────────────────────────────────────
+# Used by the dashboard Fixed/Variable donut.
+# Fixed = predictable recurring charges.  Everything else = variable.
+FIXED_CATEGORIES = {"rent", "utilities", "subscriptions", "insurance"}
+
 # ── Spending categories ────────────────────────────────────────────────────────
 CATEGORIES = [
     "groceries",

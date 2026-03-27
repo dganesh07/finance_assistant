@@ -1,12 +1,10 @@
-import { useState, useEffect } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, Cell,
-} from 'recharts'
+import { useState, useEffect, useCallback } from 'react'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { api } from '../api.js'
 import styles from './Dashboard.module.css'
 
-// ── Colour per category ────────────────────────────────────────────────────────
+// ── Constants ───────────────────────────────────────────────────────────────────
+
 const CAT_COLORS = {
   food:          '#f59e0b',
   groceries:     '#4ade80',
@@ -24,52 +22,286 @@ const CAT_COLORS = {
   atm:           '#fbbf24',
   fees:          '#94a3b8',
   income:        '#4ade80',
-  transfer:      '#64748b',
+  insurance:     '#fca5a5',
+  hobbies:       '#818cf8',
   other:         '#475569',
 }
 
 const catColor = c => CAT_COLORS[c] ?? '#60a5fa'
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+const fmt  = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 0 })}`
+const fmtd = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
 
-function StatCard({ label, value, sub, accent }) {
+function monthLabel(ym) {
+  const [y, m] = ym.split('-')
+  return new Date(Number(y), Number(m) - 1).toLocaleString('en-CA', { month: 'long', year: 'numeric' })
+}
+
+// ── Stat card with month-over-month delta ────────────────────────────────────────
+
+function StatCard({ label, value, sub, accent, curr, prev, deltaInvert }) {
+  let delta = null
+  if (prev && prev > 0) delta = ((curr - prev) / prev) * 100
+
+  const up = delta > 0
+  // deltaInvert: for SPENT, going up is bad (red). For INCOME/NET, going up is good (green).
+  const deltaColor = delta === null
+    ? null
+    : (up !== !!deltaInvert) ? 'var(--green)' : 'var(--red)'
+
   return (
-    <div className={styles.card} style={{ borderColor: accent + '33' }}>
+    <div className={styles.card}>
       <div className={styles.cardLabel}>{label}</div>
       <div className={styles.cardValue} style={{ color: accent }}>{value}</div>
       {sub && <div className={styles.cardSub}>{sub}</div>}
+      {delta !== null && (
+        <div className={styles.cardDelta} style={{ color: deltaColor }}>
+          {up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs prev
+        </div>
+      )}
     </div>
   )
 }
 
-function BillRow({ bill }) {
+// ── Expandable category bar chart ──────────────────────────────────────────────
+
+function CategoryBreakdown({ categories }) {
+  const [expanded, setExpanded] = useState(new Set())
+
+  const toggle = cat =>
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.has(cat) ? next.delete(cat) : next.add(cat)
+      return next
+    })
+
+  const maxTotal = Math.max(...categories.map(c => c.total), 1)
+
   return (
-    <div className={styles.billRow}>
-      <span className={styles.billName}>{bill.name}</span>
-      <span className={styles.billMeta}>
-        {bill.due_day ? `due ${bill.due_day}` : bill.frequency}
-      </span>
-      <span
-        className={styles.badge}
-        style={bill.autopay
-          ? { background: '#1a3a1a', color: '#4ade80' }
-          : { background: '#292318', color: '#f59e0b' }}
-      >
-        {bill.autopay ? 'autopay' : 'manual'}
-      </span>
-      <span className={styles.billAmount}>${bill.amount.toFixed(2)}</span>
+    <div className={styles.catList}>
+      {categories.map(cat => {
+        const isExpanded   = expanded.has(cat.category)
+        const hasSubcats   = cat.subcategories?.some(s => s.subcategory)
+        const pct          = (cat.total / maxTotal) * 100
+        const delta        = cat.prev_total > 0
+          ? ((cat.total - cat.prev_total) / cat.prev_total) * 100
+          : null
+
+        return (
+          <div key={cat.category}>
+            {/* ── Category row ── */}
+            <div
+              className={styles.catRow}
+              onClick={() => hasSubcats && toggle(cat.category)}
+              style={{ cursor: hasSubcats ? 'pointer' : 'default' }}
+            >
+              <span className={styles.catDot} style={{ background: catColor(cat.category) }} />
+              <span className={styles.catName}>{cat.category}</span>
+              <span className={styles.catAmt}>{fmt(cat.total)}</span>
+              <div className={styles.barTrack}>
+                <div
+                  className={styles.barFill}
+                  style={{ width: `${pct}%`, background: catColor(cat.category) }}
+                />
+              </div>
+              {delta !== null && (
+                <span
+                  className={styles.catDelta}
+                  style={{ color: delta > 10 ? 'var(--red)' : delta < -10 ? 'var(--green)' : 'var(--muted)' }}
+                >
+                  {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}%
+                </span>
+              )}
+              {hasSubcats && (
+                <span className={styles.expandIcon}>{isExpanded ? '▲' : '▼'}</span>
+              )}
+            </div>
+
+            {/* ── Subcategory rows ── */}
+            {isExpanded && cat.subcategories?.filter(s => s.subcategory).map(sub => (
+              <div key={sub.subcategory} className={styles.subcatRow}>
+                <span className={styles.subcatIndent} />
+                <span className={styles.subcatLine} style={{ background: catColor(cat.category) }} />
+                <span className={styles.subcatName}>{sub.subcategory}</span>
+                <span className={styles.subcatAmt}>{fmt(sub.total)}</span>
+                <div className={styles.barTrack}>
+                  <div
+                    className={styles.barFill}
+                    style={{
+                      width: `${(sub.total / maxTotal) * 100}%`,
+                      background: catColor(cat.category),
+                      opacity: 0.45,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-const CustomTooltip = ({ active, payload, period }) => {
+// ── Fixed vs Variable donut ───────────────────────────────────────────────────
+
+const DONUT_COLORS = ['#c084fc', '#60a5fa']
+
+const DonutTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null
-  const d = payload[0].payload
   return (
     <div className={styles.tooltip}>
-      <div className={styles.tooltipLabel}>{d.category}</div>
-      <div className={styles.tooltipValue}>${d.total.toFixed(2)}</div>
-      <div className={styles.tooltipSub}>{d.count} transactions · {period}</div>
+      <span style={{ color: payload[0].payload.fill }}>{payload[0].name}</span>
+      <span> {fmtd(payload[0].value)}</span>
+    </div>
+  )
+}
+
+function FixedVariableDonut({ fixed, variable }) {
+  const total = fixed + variable
+  if (total <= 0) return <p className={styles.empty}>No data</p>
+
+  const data = [
+    { name: 'Fixed',    value: fixed,    fill: DONUT_COLORS[0] },
+    { name: 'Variable', value: variable, fill: DONUT_COLORS[1] },
+  ]
+
+  return (
+    <div className={styles.donutWrap}>
+      <ResponsiveContainer width={160} height={160}>
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={46}
+            outerRadius={72}
+            strokeWidth={0}
+            dataKey="value"
+          >
+            {data.map((entry, i) => (
+              <Cell key={i} fill={entry.fill} fillOpacity={0.85} />
+            ))}
+          </Pie>
+          <Tooltip content={<DonutTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+
+      <div className={styles.donutLegend}>
+        {data.map(d => (
+          <div key={d.name} className={styles.donutLegendRow}>
+            <span className={styles.donutDot} style={{ background: d.fill }} />
+            <span className={styles.donutLegendLabel}>{d.name}</span>
+            <span className={styles.donutLegendAmt} style={{ color: d.fill }}>
+              {fmtd(d.value)}
+            </span>
+          </div>
+        ))}
+        <div className={styles.donutPct}>
+          {Math.round((fixed / total) * 100)}% fixed
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Subscriptions + one-time charges panel ────────────────────────────────────
+
+function FlagsPanel({ subscriptions, oneTime }) {
+  if (subscriptions.length === 0 && oneTime.length === 0) return null
+
+  return (
+    <div className={styles.flagsPanel}>
+      <div className={styles.panelTitle}>Subscriptions &amp; one-time charges</div>
+      <div className={styles.flagsRow}>
+        {subscriptions.map((s, i) => (
+          <span key={i} className={styles.flagChip}>
+            {s.description}
+            <span className={styles.flagAmt}>{fmtd(s.total)}</span>
+          </span>
+        ))}
+        {oneTime.map((o, i) => (
+          <span key={i} className={`${styles.flagChip} ${styles.flagOneTime}`}>
+            <span className={styles.flagTag}>one-time</span>
+            {o.description} <span className={styles.flagAmt}>{fmtd(o.total)}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── AI Insights panel ─────────────────────────────────────────────────────────
+
+const TYPE_ICON  = { warning: '⚠', tip: '→', info: '●' }
+const TYPE_COLOR = { warning: 'var(--red)', tip: 'var(--amber)', info: 'var(--blue)' }
+
+function InsightsPanel({ month }) {
+  const [insights, setInsights] = useState(null)
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState(null)
+  const [meta,     setMeta]     = useState(null)
+
+  const refresh = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    api.postInsights(month)
+      .then(data => {
+        if (data.error) {
+          setError(data.error)
+        } else {
+          setInsights(data.insights)
+          setMeta({ backend: data.backend, model: data.model })
+        }
+      })
+      .catch(err => setError(err.message ?? 'Failed to generate insights'))
+      .finally(() => setLoading(false))
+  }, [month])
+
+  return (
+    <div className={styles.insightsPanel}>
+      <div className={styles.insightsHeader}>
+        <span className={styles.panelTitle} style={{ marginBottom: 0 }}>AI Insights</span>
+        {meta && (
+          <span className={styles.insightsMeta}>
+            {meta.backend} · {meta.model}
+          </span>
+        )}
+        <button
+          className={styles.refreshBtn}
+          onClick={refresh}
+          disabled={loading}
+        >
+          {loading ? '…' : '↻ Refresh'}
+        </button>
+      </div>
+
+      {!insights && !loading && !error && (
+        <p className={styles.insightsEmpty}>
+          Click Refresh to generate AI insights for {month ? monthLabel(month) : 'this month'}.
+        </p>
+      )}
+      {loading && (
+        <p className={styles.insightsEmpty}>Generating insights…</p>
+      )}
+      {error && (
+        <p className={styles.insightsError}>{error}</p>
+      )}
+      {insights && insights.length > 0 && (
+        <ul className={styles.insightsList}>
+          {insights.map((ins, i) => (
+            <li key={i} className={styles.insightItem}>
+              <span
+                className={styles.insightIcon}
+                style={{ color: TYPE_COLOR[ins.type] ?? TYPE_COLOR.info }}
+              >
+                {TYPE_ICON[ins.type] ?? '●'}
+              </span>
+              <span className={styles.insightText}>{ins.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -77,131 +309,117 @@ const CustomTooltip = ({ active, payload, period }) => {
 // ── Main view ──────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [summary, setSummary]   = useState(null)
-  const [bills,   setBills]     = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [days,    setDays]      = useState(180)
+  const [data,       setData]       = useState(null)
+  const [month,      setMonth]      = useState(null)   // null = let API choose
+  const [fetching,   setFetching]   = useState(true)   // true only on first load
 
   useEffect(() => {
-    setLoading(true)
-    Promise.all([api.getSummary(days), api.getBills()])
-      .then(([s, b]) => { setSummary(s); setBills(b) })
-      .finally(() => setLoading(false))
-  }, [days])
+    setFetching(true)
+    api.getDashboard(month)
+      .then(d => {
+        setData(d)
+        // lock to the month the API returned (important on first load)
+        if (!month && d.month) setMonth(d.month)
+      })
+      .finally(() => setFetching(false))
+  }, [month])
 
-  if (loading) return <div className={styles.loading}>Loading…</div>
-  if (!summary) return <div className={styles.loading}>No data</div>
+  // First load: nothing to show yet
+  if (!data && fetching) return <div className={styles.loading}>Loading…</div>
+  if (!data?.month) return <div className={styles.loading}>No transaction data found.</div>
 
-  const fmt = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
-  const netColor = summary.net >= 0 ? 'var(--green)' : 'var(--red)'
+  const { spent, income, net, runway_months, prev, txn_count } = data
+  const netColor = net >= 0 ? 'var(--green)' : 'var(--red)'
 
-  // Exclude non-spending categories from the chart.
-  // investment = GIC / savings transfers — real money moves but not discretionary spend.
-  const chartData = (summary.by_category ?? [])
-    .filter(c => !['income', 'transfer', 'fees', 'investment'].includes(c.category))
-    .sort((a, b) => b.total - a.total)
-
-  const totalBills = bills.reduce((s, b) => s + b.amount, 0)
-  const manualBills = bills.filter(b => !b.autopay)
+  // Exclude non-spending categories from breakdown chart
+  const spendCats = (data.categories ?? [])
+    .filter(c => !['income', 'transfer', 'fees', 'refund'].includes(c.category))
 
   return (
-    <div className={styles.page}>
+    <div className={styles.page} style={{ opacity: fetching ? 0.6 : 1, transition: 'opacity 0.15s' }}>
+
       {/* ── Header ── */}
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>// dashboard</h1>
           <p className={styles.subtitle}>
-            {summary.period} · from {summary.period_start}
+            {monthLabel(data.month)} · {txn_count} transactions
           </p>
         </div>
-        <select value={days} onChange={e => setDays(Number(e.target.value))}>
-          <option value={30}>Last 30 days</option>
-          <option value={60}>Last 60 days</option>
-          <option value={90}>Last 90 days</option>
-          <option value={180}>Last 6 months</option>
-          <option value={365}>Last year</option>
+        <select
+          value={data.month}
+          onChange={e => setMonth(e.target.value)}
+          className={styles.monthPicker}
+        >
+          {(data.available_months ?? []).map(m => (
+            <option key={m} value={m}>{monthLabel(m)}</option>
+          ))}
         </select>
       </div>
 
       {/* ── Stat cards ── */}
       <div className={styles.cards}>
         <StatCard
-          label="Total Spent"
-          value={fmt(summary.total_out)}
+          label="Spent"
+          value={fmt(spent)}
+          sub={data.is_current_month ? 'this month' : undefined}
           accent="var(--red)"
+          curr={spent}
+          prev={prev.spent}
+          deltaInvert
         />
         <StatCard
-          label="Total In"
-          value={fmt(summary.total_in)}
+          label="Income"
+          value={fmt(income)}
           accent="var(--green)"
+          curr={income}
+          prev={prev.income}
         />
         <StatCard
           label="Net"
-          value={(summary.net >= 0 ? '+' : '-') + fmt(summary.net)}
-          sub={summary.net >= 0 ? 'ahead' : 'deficit'}
+          value={(net >= 0 ? '+' : '') + fmt(net)}
+          sub={net >= 0 ? 'ahead' : 'deficit'}
           accent={netColor}
         />
         <StatCard
           label="Runway"
-          value={summary.runway_months != null ? `${summary.runway_months} mo` : '—'}
-          sub="at current burn rate"
+          value={runway_months != null ? `${runway_months} mo` : '—'}
+          sub="at current burn"
           accent="var(--amber)"
         />
       </div>
 
-      {/* ── Chart + bills side by side ── */}
+      {/* ── Category breakdown + Fixed/Variable ── */}
       <div className={styles.body}>
-
-        {/* Spending breakdown */}
-        <div className={styles.panel}>
-          <div className={styles.panelTitle}>Spending by category</div>
-          {chartData.length === 0 ? (
-            <p className={styles.empty}>No spending data for this period.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={chartData.length * 36 + 20}>
-              <BarChart
-                data={chartData}
-                layout="vertical"
-                margin={{ top: 0, right: 16, left: 0, bottom: 0 }}
-              >
-                <XAxis type="number" hide />
-                <YAxis
-                  type="category"
-                  dataKey="category"
-                  width={110}
-                  tick={{ fill: 'var(--subtle)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <Tooltip content={<CustomTooltip period={summary.period} />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
-                <Bar dataKey="total" radius={[0, 4, 4, 0]}>
-                  {chartData.map((entry) => (
-                    <Cell key={entry.category} fill={catColor(entry.category)} fillOpacity={0.85} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-
-        {/* Bills */}
         <div className={styles.panel}>
           <div className={styles.panelTitle}>
-            Bills
-            <span className={styles.panelMeta}>${totalBills.toFixed(2)}/mo</span>
+            Category breakdown
+            <span className={styles.panelNote}>click to expand subcategories</span>
           </div>
-          {bills.length === 0
-            ? <p className={styles.empty}>No bills configured in bills.json</p>
-            : bills.map((b, i) => <BillRow key={i} bill={b} />)
+          {spendCats.length === 0
+            ? <p className={styles.empty}>No spending data for this month.</p>
+            : <CategoryBreakdown categories={spendCats} />
           }
-          {manualBills.length > 0 && (
-            <div className={styles.manualAlert}>
-              ⚠ Manual payment needed:{' '}
-              {manualBills.map(b => b.name).join(', ')}
-            </div>
-          )}
+        </div>
+
+        <div className={styles.panel}>
+          <div className={styles.panelTitle}>Fixed vs Variable</div>
+          <FixedVariableDonut
+            fixed={data.fixed_total ?? 0}
+            variable={data.variable_total ?? 0}
+          />
         </div>
       </div>
+
+      {/* ── Subscriptions & one-time charges ── */}
+      <FlagsPanel
+        subscriptions={data.subscriptions ?? []}
+        oneTime={data.one_time_charges ?? []}
+      />
+
+      {/* ── AI Insights ── */}
+      <InsightsPanel month={data.month} />
+
     </div>
   )
 }

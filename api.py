@@ -37,7 +37,10 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, DB_PATH, STATEMENTS_DIR, SUBCATEGORIES
+from config import (
+    BILLS_FILE, BURN_RATE_START, CATEGORIES, CORRECTIONS_FILE, DB_PATH,
+    FIXED_CATEGORIES, REPORT_BACKEND, REPORT_MODEL, STATEMENTS_DIR, SUBCATEGORIES,
+)
 from src.categorizer import categorize_transactions
 from src.context_builder import build_context
 from src.parser import parse_new_statements
@@ -751,6 +754,297 @@ def get_context():
     """
     text = build_context()
     return {"context": text}
+
+
+# ── GET /api/dashboard ─────────────────────────────────────────────────────────
+
+@app.get("/api/dashboard")
+def get_dashboard(month: Optional[str] = None):
+    """
+    All data needed for the hybrid monthly dashboard.
+
+    Defaults to the most recent month with transactions.
+    Returns: stat cards with prev-month deltas, by_category with subcategories,
+    fixed/variable split, bills, one-time charges, available month list.
+    """
+    conn = get_conn()
+
+    # ── Available months ────────────────────────────────────────────────────────
+    month_rows = conn.execute("""
+        SELECT DISTINCT strftime('%Y-%m', date) AS m
+        FROM transactions
+        ORDER BY m DESC
+        LIMIT 24
+    """).fetchall()
+    available = [r["m"] for r in month_rows]
+
+    if not available:
+        conn.close()
+        return {"available_months": [], "month": None}
+
+    target = month if month in available else available[0]
+    y, m_num = map(int, target.split("-"))
+    m_start  = f"{target}-01"
+    m_end    = f"{y}-{m_num+1:02d}-01" if m_num < 12 else f"{y+1}-01-01"
+
+    # Previous month
+    prev_m_num = m_num - 1 if m_num > 1 else 12
+    prev_y     = y if m_num > 1 else y - 1
+    prev_label = f"{prev_y}-{prev_m_num:02d}"
+    prev_start = f"{prev_label}-01"
+    prev_end   = m_start  # current month start = prev month end
+
+    # ── Current month: income, refunds ─────────────────────────────────────────
+    totals = conn.execute("""
+        SELECT
+            COALESCE(SUM(CASE WHEN type='debit'
+                              AND category NOT IN ('transfer','fees','investment')
+                              AND (is_one_time=0 OR is_one_time IS NULL)
+                              THEN amount ELSE 0 END), 0) AS regular_out,
+            COALESCE(SUM(CASE WHEN type='debit'
+                              AND category NOT IN ('transfer','fees','investment')
+                              AND is_one_time=1
+                              THEN amount ELSE 0 END), 0) AS one_time_out,
+            COALESCE(SUM(CASE WHEN type='credit'
+                              AND category NOT IN ('transfer','fees','refund')
+                              THEN amount ELSE 0 END), 0) AS income,
+            COALESCE(SUM(CASE WHEN type='credit' AND category='refund'
+                              THEN amount ELSE 0 END), 0) AS refunds
+        FROM transactions WHERE date >= ? AND date < ?
+    """, (m_start, m_end)).fetchone()
+
+    spent    = round(totals["regular_out"] + totals["one_time_out"], 2)
+    income   = round(totals["income"], 2)
+    refunds  = round(totals["refunds"], 2)
+    net      = round(income - (spent - refunds), 2)
+
+    txn_count = conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE date >= ? AND date < ?",
+        (m_start, m_end)
+    ).fetchone()[0]
+
+    # ── Previous month totals (for deltas) ─────────────────────────────────────
+    prev_totals = conn.execute("""
+        SELECT
+            COALESCE(SUM(CASE WHEN type='debit'
+                              AND category NOT IN ('transfer','fees','investment')
+                              THEN amount ELSE 0 END), 0) AS spent,
+            COALESCE(SUM(CASE WHEN type='credit'
+                              AND category NOT IN ('transfer','fees','refund')
+                              THEN amount ELSE 0 END), 0) AS income
+        FROM transactions WHERE date >= ? AND date < ?
+    """, (prev_start, prev_end)).fetchone()
+
+    # ── Categories with subcategories for current month ────────────────────────
+    cat_rows = conn.execute("""
+        SELECT category,
+               COALESCE(SUM(amount), 0) AS total,
+               COUNT(*)                 AS count
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit'
+          AND category NOT IN ('transfer','fees','investment')
+          AND (is_one_time = 0 OR is_one_time IS NULL)
+        GROUP BY category
+        ORDER BY total DESC
+    """, (m_start, m_end)).fetchall()
+
+    subcat_rows = conn.execute("""
+        SELECT category, subcategory,
+               COALESCE(SUM(amount), 0) AS total,
+               COUNT(*)                 AS count
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit'
+          AND category NOT IN ('transfer','fees','investment')
+          AND (is_one_time = 0 OR is_one_time IS NULL)
+        GROUP BY category, subcategory
+        ORDER BY category, total DESC
+    """, (m_start, m_end)).fetchall()
+
+    # Build subcategory lookup
+    subcat_map: dict[str, list] = {}
+    for r in subcat_rows:
+        cat = r["category"]
+        subcat_map.setdefault(cat, []).append({
+            "subcategory": r["subcategory"],
+            "total":       round(r["total"], 2),
+            "count":       r["count"],
+        })
+
+    # Previous month per-category totals for delta
+    prev_cat_rows = conn.execute("""
+        SELECT category, COALESCE(SUM(amount), 0) AS total
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit'
+          AND category NOT IN ('transfer','fees','investment')
+        GROUP BY category
+    """, (prev_start, prev_end)).fetchall()
+    prev_cat_lookup = {r["category"]: round(r["total"], 2) for r in prev_cat_rows}
+
+    categories = [
+        {
+            "category":    r["category"],
+            "total":       round(r["total"], 2),
+            "count":       r["count"],
+            "prev_total":  prev_cat_lookup.get(r["category"], 0.0),
+            "subcategories": subcat_map.get(r["category"], []),
+        }
+        for r in cat_rows
+    ]
+
+    # ── Fixed vs Variable ───────────────────────────────────────────────────────
+    fixed_total    = round(sum(c["total"] for c in categories if c["category"] in FIXED_CATEGORIES), 2)
+    variable_total = round(sum(c["total"] for c in categories if c["category"] not in FIXED_CATEGORIES), 2)
+
+    # ── One-time charges this month ─────────────────────────────────────────────
+    one_time_rows = conn.execute("""
+        SELECT description, category,
+               COALESCE(SUM(amount), 0) AS total,
+               COUNT(*) AS count
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit' AND is_one_time = 1
+          AND category NOT IN ('transfer','fees','investment')
+        GROUP BY description, category
+        ORDER BY total DESC
+    """, (m_start, m_end)).fetchall()
+
+    one_time_charges = [
+        {"description": r["description"], "category": r["category"],
+         "total": round(r["total"], 2), "count": r["count"]}
+        for r in one_time_rows
+    ]
+
+    # ── Runway ─────────────────────────────────────────────────────────────────
+    balance_row = conn.execute("""
+        SELECT closing_balance
+        FROM account_balances
+        WHERE account = 'chequing'
+        ORDER BY statement_month DESC LIMIT 1
+    """).fetchone()
+    td_balance = balance_row["closing_balance"] if balance_row else None
+
+    burn_rows = conn.execute("""
+        SELECT strftime('%Y-%m', date) AS mo,
+               SUM(amount) AS monthly
+        FROM transactions
+        WHERE strftime('%Y-%m', date) >= ?
+          AND type = 'debit'
+          AND category NOT IN ('transfer','fees','investment')
+          AND (is_one_time = 0 OR is_one_time IS NULL)
+        GROUP BY mo
+    """, (BURN_RATE_START,)).fetchall()
+    avg_burn = (
+        round(sum(r["monthly"] for r in burn_rows) / len(burn_rows), 2)
+        if burn_rows else None
+    )
+    runway_months = (
+        round(td_balance / avg_burn, 1)
+        if td_balance and avg_burn and avg_burn > 0 else None
+    )
+
+    # ── Subscription transactions for this month ──────────────────────────────
+    sub_rows = conn.execute("""
+        SELECT description,
+               COALESCE(SUM(amount), 0) AS total,
+               COUNT(*) AS count,
+               subcategory
+        FROM transactions
+        WHERE date >= ? AND date < ?
+          AND type = 'debit'
+          AND category = 'subscriptions'
+        GROUP BY description, subcategory
+        ORDER BY total DESC
+    """, (m_start, m_end)).fetchall()
+
+    subscriptions = [
+        {
+            "description": r["description"],
+            "total":       round(r["total"], 2),
+            "count":       r["count"],
+            "subcategory": r["subcategory"],
+        }
+        for r in sub_rows
+    ]
+
+    conn.close()
+
+    from datetime import date as _date
+    today = _date.today()
+    is_current = target == today.strftime("%Y-%m")
+
+    return {
+        "month":           target,
+        "label":           _month_label(target),
+        "is_current_month": is_current,
+        "txn_count":       txn_count,
+        "spent":           spent,
+        "income":          income,
+        "refunds":         refunds,
+        "net":             net,
+        "prev": {
+            "month":  prev_label,
+            "spent":  round(prev_totals["spent"], 2),
+            "income": round(prev_totals["income"], 2),
+        },
+        "fixed_total":    fixed_total,
+        "variable_total": variable_total,
+        "runway_months":  runway_months,
+        "avg_burn":       avg_burn,
+        "categories":     categories,
+        "one_time_charges": one_time_charges,
+        "subscriptions":  subscriptions,
+        "available_months": available,
+    }
+
+
+def _month_label(ym: str) -> str:
+    """'2026-03' → 'March 2026'"""
+    y, m = ym.split("-")
+    import calendar
+    return f"{calendar.month_name[int(m)]} {y}"
+
+
+# ── POST /api/insights ─────────────────────────────────────────────────────────
+
+@app.post("/api/insights")
+def post_insights(month: Optional[str] = None):
+    """
+    Generate AI insights for the given month (YYYY-MM) using the configured backend.
+
+    Backend is controlled by REPORT_BACKEND in config_local.py:
+      "ollama"  — local Ollama, model set by REPORT_MODEL (default)
+      "claude"  — Anthropic Claude API, requires ANTHROPIC_API_KEY
+
+    Prompt is loaded from data/prompts/insights_prompt.txt at call time — edit
+    the file to tune output without restarting the server.
+
+    Returns: { insights, month, backend, model, error? }
+    """
+    from src.reporter import generate_insights, ReportError
+
+    context = build_context()
+    label   = _month_label(month) if month else "current month"
+
+    try:
+        insights = generate_insights(context=context, month=label)
+    except ReportError as exc:
+        return {
+            "insights": [],
+            "month":    month,
+            "backend":  REPORT_BACKEND,
+            "model":    REPORT_MODEL,
+            "error":    str(exc),
+        }
+
+    return {
+        "insights": insights,
+        "month":    month,
+        "backend":  REPORT_BACKEND,
+        "model":    REPORT_MODEL,
+    }
 
 
 # ── /api/corrections ───────────────────────────────────────────────────────────
