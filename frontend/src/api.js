@@ -53,8 +53,14 @@ export const api = {
   // Update a single transaction (category, confirmed, notes)
   updateTransaction: (id, body) => patch(`/api/transactions/${id}`, body),
 
+  // Manually create a transaction
+  addTransaction: (body) => post('/api/transactions', body),
+
   // Confirm multiple transactions at once
   confirmAll: (ids) => post('/api/transactions/confirm-all', { ids }),
+
+  // Distinct account names
+  getAccounts: () => get('/api/accounts'),
 
   // Corrections-only pass (fast, no LLM)
   applyCorrections: () => post('/api/apply-corrections', {}),

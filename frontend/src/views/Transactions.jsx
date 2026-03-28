@@ -27,8 +27,10 @@ export default function Transactions() {
   // Pagination
   const [page, setPage] = useState(0)
 
-  // Inline edit state: { id, category, subcategory }
-  const [editing, setEditing] = useState(null)
+  // Inline edit state: { id, category, subcategory, notes }
+  const [editing,     setEditing]     = useState(null)
+  // Note-only edit state: { id, value }
+  const [noteEditing, setNoteEditing] = useState(null)
 
   useEffect(() => { setPage(0) }, [search, category, dateFrom, dateTo, monthPick])
 
@@ -55,22 +57,40 @@ export default function Transactions() {
 
   // ── Inline edit ─────────────────────────────────────────────────────────────
   const startEdit = txn =>
-    setEditing({ id: txn.id, category: txn.category, subcategory: txn.subcategory ?? '' })
+    setEditing({ id: txn.id, category: txn.category, subcategory: txn.subcategory ?? '', notes: txn.notes ?? '' })
 
   const saveEdit = async (id) => {
     if (!editing || editing.id !== id) return
     // If the chosen category has no subcategories, always clear it
     const subAllowed = subcategoryMap[editing.category] ?? []
     const sub = subAllowed.length > 0 ? (editing.subcategory || null) : null
-    await api.updateTransaction(id, { category: editing.category, subcategory: sub })
+    const notes = editing.notes.trim() || null
+    await api.updateTransaction(id, { category: editing.category, subcategory: sub, notes })
     // Patch local state directly — avoids re-fetch which resets scroll position
     setData(prev => ({
       ...prev,
       transactions: prev.transactions.map(t =>
-        t.id === id ? { ...t, category: editing.category, subcategory: sub } : t
+        t.id === id ? { ...t, category: editing.category, subcategory: sub, notes } : t
       ),
     }))
     setEditing(null)
+  }
+
+  // ── Note-only edit ──────────────────────────────────────────────────────────
+  const startNoteEdit = (txn) =>
+    setNoteEditing({ id: txn.id, value: txn.notes ?? '' })
+
+  const saveNote = async () => {
+    if (!noteEditing) return
+    const notes = noteEditing.value.trim() || null
+    await api.updateTransaction(noteEditing.id, { notes })
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === noteEditing.id ? { ...t, notes } : t
+      ),
+    }))
+    setNoteEditing(null)
   }
 
   // ── One-time toggle ─────────────────────────────────────────────────────────
@@ -147,6 +167,7 @@ export default function Transactions() {
                 <th>Account</th>
                 <th>Category</th>
                 <th>Subcategory</th>
+                <th className={styles.center}>Note</th>
                 <th className={styles.center}>✓</th>
                 <th className={styles.center} title="One-time — excluded from burn rate">1×</th>
               </tr>
@@ -208,6 +229,39 @@ export default function Transactions() {
                         </span>
                       ) : (
                         <span className={styles.subBadgeEmpty} onClick={() => startEdit(txn)} title="Click to add">—</span>
+                      )}
+                    </td>
+
+                    {/* ── Notes ── */}
+                    <td className={styles.center}>
+                      {isEditing ? (
+                        // Part of full category edit — input in the notes field
+                        <input
+                          type="text"
+                          value={editing.notes}
+                          onChange={e => setEditing(p => ({ ...p, notes: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}
+                          placeholder="note…"
+                          className={styles.noteInput}
+                        />
+                      ) : noteEditing?.id === txn.id ? (
+                        // Standalone note edit
+                        <input
+                          type="text"
+                          value={noteEditing.value}
+                          onChange={e => setNoteEditing(p => ({ ...p, value: e.target.value }))}
+                          onBlur={saveNote}
+                          onKeyDown={e => { if (e.key === 'Enter') saveNote(); if (e.key === 'Escape') setNoteEditing(null) }}
+                          placeholder="note…"
+                          className={styles.noteInput}
+                          autoFocus
+                        />
+                      ) : txn.notes ? (
+                        <span className={styles.noteIconWrap} data-note={txn.notes} onClick={() => startNoteEdit(txn)} style={{ cursor: 'pointer' }}>
+                          <span className={styles.noteIcon}>note</span>
+                        </span>
+                      ) : (
+                        <span className={styles.noteEmpty} onClick={() => startNoteEdit(txn)} title="Add note">+</span>
                       )}
                     </td>
 

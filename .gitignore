@@ -61,3 +61,4 @@ config_local.py
 *.log
 .env
 .env.local
+finance.db.seed

@@ -101,7 +101,7 @@ SUBCATEGORIES: dict[str, list[str]] = {
     "subscriptions": ["streaming", "app", "cloud_storage", "ai_tool", "membership"],
     "travel":        [],
     "fees":          ["bank_fees", "atm"],
-    "utilities":     ["internet", "phone", "electricity"],
+    "utilities":     ["internet", "phone", "electricity", "home"],
     "insurance":     ["car", "home", "device"],
     "rent":          [],
     "income":        ["work", "other"],

@@ -275,7 +275,10 @@ def update_transaction(txn_id: int, body: TransactionUpdate):
         params.append(body.subcategory or None)   # empty string also clears
     if body.confirmed   is not None: fields.append("confirmed = ?");   params.append(body.confirmed)
     if body.is_one_time is not None: fields.append("is_one_time = ?"); params.append(body.is_one_time)
-    if body.notes       is not None: fields.append("notes = ?");       params.append(body.notes)
+    # notes uses model_fields_set so an explicit null/empty clears the value in DB
+    if "notes" in body.model_fields_set:
+        fields.append("notes = ?")
+        params.append(body.notes or None)
 
     if fields:
         conn.execute(
@@ -291,6 +294,63 @@ def update_transaction(txn_id: int, body: TransactionUpdate):
     ).fetchone()
     conn.close()
     return dict(row)
+
+
+# ── POST /api/transactions  (manual entry) ────────────────────────────────────
+
+class ManualTransactionCreate(BaseModel):
+    date:        str
+    description: str
+    amount:      float
+    type:        str = "debit"   # "debit" | "credit"
+    account:     str = "chequing"
+    category:    Optional[str] = "other"
+    subcategory: Optional[str] = None
+    notes:       Optional[str] = None
+    confirmed:   int = 1         # manual entries are confirmed by default
+
+
+@app.post("/api/transactions")
+def create_transaction(body: ManualTransactionCreate):
+    """Manually add a single transaction. Confirmed by default."""
+    import hashlib
+    raw = f"{body.date}|{body.description}|{body.amount:.2f}|0"
+    h   = hashlib.md5(raw.encode()).hexdigest()
+    conn = get_conn()
+    # If hash already exists bump occurrence until unique
+    occurrence = 0
+    while conn.execute("SELECT 1 FROM transactions WHERE hash = ?", (h,)).fetchone():
+        occurrence += 1
+        raw = f"{body.date}|{body.description}|{body.amount:.2f}|{occurrence}"
+        h   = hashlib.md5(raw.encode()).hexdigest()
+    conn.execute(
+        """INSERT INTO transactions
+             (date, description, amount, type, account,
+              category, subcategory, notes, confirmed, source_file, hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)""",
+        (body.date, body.description, body.amount, body.type, body.account,
+         body.category, body.subcategory, body.notes or None, body.confirmed, h),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, date, description, amount, type, account, "
+        "category, subcategory, confirmed, notes, is_one_time FROM transactions WHERE hash = ?", (h,)
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+# ── GET /api/accounts ─────────────────────────────────────────────────────────
+
+@app.get("/api/accounts")
+def get_accounts():
+    """Return distinct account names from all transactions."""
+    conn  = get_conn()
+    rows  = conn.execute(
+        "SELECT DISTINCT account FROM transactions WHERE account IS NOT NULL ORDER BY account"
+    ).fetchall()
+    conn.close()
+    return [r["account"] for r in rows]
 
 
 # ── POST /api/transactions/confirm-all ────────────────────────────────────────

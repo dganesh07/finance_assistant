@@ -105,6 +105,8 @@ export default function Review({ onConfirm }) {
   const [lastImportFiles,    setLastImportFiles]    = useState([]) // source_files from last import
   const [confirmedLocalCats, setConfirmedLocalCats] = useState({}) // id → category for confirmed tab edits
   const [autoOpen,           setAutoOpen]           = useState(true) // collapsible open state
+  const [localNotes,         setLocalNotes]         = useState({})   // id → note text (pending save)
+  const [showAddModal,       setShowAddModal]       = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -156,7 +158,8 @@ export default function Review({ onConfirm }) {
       return
     }
 
-    const effectiveSub = (localSubs[txn.id] ?? txn.subcategory) || null
+    const effectiveSub  = (localSubs[txn.id] ?? txn.subcategory) || null
+    const effectiveNote = localNotes[txn.id] ?? txn.notes ?? null
 
     // Save as permanent correction rule if toggled (works for AI guesses too)
     if (saveAsRule[txn.id]) {
@@ -166,6 +169,7 @@ export default function Review({ onConfirm }) {
     await api.updateTransaction(txn.id, {
       category:    effectiveCat,
       subcategory: effectiveSub,
+      notes:       effectiveNote || null,
       confirmed:   1,
     })
     setTransactions(prev => prev.filter(t => t.id !== txn.id))
@@ -246,6 +250,15 @@ export default function Review({ onConfirm }) {
     setConfirmedLocalCats(p => ({ ...p, [txn.id]: newCat }))
   }
 
+  // ── One-time toggle ─────────────────────────────────────────────────────────
+  const toggleOneTime = async (txn) => {
+    const next = txn.is_one_time ? 0 : 1
+    await api.updateTransaction(txn.id, { is_one_time: next })
+    setTransactions(prev => prev.map(t =>
+      t.id === txn.id ? { ...t, is_one_time: next } : t
+    ))
+  }
+
   const pending = transactions.filter(t => !t.confirmed)
 
   return (
@@ -259,6 +272,15 @@ export default function Review({ onConfirm }) {
 
         {tab === 'needs_review' && (
           <div className={styles.actions}>
+            {/* Manual add */}
+            <button
+              className={styles.btnAdd}
+              onClick={() => setShowAddModal(true)}
+              title="Manually add a transaction"
+            >+ add</button>
+
+            <div className={styles.actionDivider} />
+
             {/* Step 1: Import */}
             <button
               className={styles.btnStep}
@@ -301,6 +323,16 @@ export default function Review({ onConfirm }) {
           </div>
         )}
       </div>
+
+      {/* ── Add transaction modal ── */}
+      {showAddModal && (
+        <AddTransactionModal
+          categories={categories}
+          subcategoryMap={subcategoryMap}
+          onClose={() => setShowAddModal(false)}
+          onSaved={() => { setShowAddModal(false); load(); onConfirm?.() }}
+        />
+      )}
 
       {/* ── Cheat sheet ── */}
       {tab === 'needs_review' && <CheatSheet />}
@@ -463,6 +495,7 @@ export default function Review({ onConfirm }) {
           localCats={confirmedLocalCats}
           onCatChange={(id, cat) => setConfirmedLocalCats(p => ({ ...p, [id]: cat }))}
           onSave={saveConfirmedEdit}
+          onToggleOneTime={toggleOneTime}
           lastImportFiles={lastImportFiles}
           autoOpen={autoOpen}
           onToggle={() => setAutoOpen(p => !p)}
@@ -484,6 +517,7 @@ export default function Review({ onConfirm }) {
                 <th className={styles.right}>Amount</th>
                 <th>Account</th>
                 <th>Category</th>
+                <th className={styles.center} title="One-time — excluded from burn rate">1×</th>
                 <th className={styles.center}>Confirm</th>
               </tr>
             </thead>
@@ -500,7 +534,10 @@ export default function Review({ onConfirm }) {
                   onSubChange={sub => setLocalSubs(p => ({ ...p, [txn.id]: sub }))}
                   saveAsRule={saveAsRule[txn.id] ?? false}
                   onSaveAsRuleChange={v => setSaveAsRule(p => ({ ...p, [txn.id]: v }))}
+                  localNote={localNotes[txn.id] ?? txn.notes ?? ''}
+                  onNoteChange={note => setLocalNotes(p => ({ ...p, [txn.id]: note }))}
                   onConfirm={() => confirmOne(txn)}
+                  onToggleOneTime={() => toggleOneTime(txn)}
                 />
               ))}
             </tbody>
@@ -513,7 +550,7 @@ export default function Review({ onConfirm }) {
 
 // ── Single row (needs review) ───────────────────────────────────────────────────
 
-function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatChange, onSubChange, saveAsRule, onSaveAsRuleChange, onConfirm }) {
+function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatChange, onSubChange, saveAsRule, onSaveAsRuleChange, localNote, onNoteChange, onConfirm, onToggleOneTime }) {
   const isDebit    = txn.type === 'debit'
   const amtColor   = isDebit ? 'var(--red)' : 'var(--green)'
   const sign       = isDebit ? '-' : '+'
@@ -523,6 +560,8 @@ function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatC
   const ruleLabel  = isUnpicked ? null
     : (changed || !aiHasGuess) ? 'save as rule'
     : 'pin AI guess as rule'
+
+  const [noteOpen, setNoteOpen] = useState(!!localNote)
 
   // Subcategory options for the currently selected category
   const subOptions = (subcategoryMap[localCat] ?? [])
@@ -536,7 +575,7 @@ function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatC
       </td>
       <td className={styles.account}>{txn.account}</td>
       <td>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           {/* Category picker */}
           <select
             value={isUnpicked ? '' : localCat}
@@ -560,19 +599,48 @@ function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatC
             </select>
           )}
 
-          {/* Save as rule toggle */}
-          {ruleLabel && (
-            <label className={styles.ruleToggle}>
-              <input
-                type="checkbox"
-                checked={saveAsRule}
-                onChange={e => onSaveAsRuleChange(e.target.checked)}
-              />
-              {ruleLabel}
-            </label>
+          {/* Rule toggle + note trigger on the same line */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {ruleLabel && (
+              <label className={styles.ruleToggle}>
+                <input
+                  type="checkbox"
+                  checked={saveAsRule}
+                  onChange={e => onSaveAsRuleChange(e.target.checked)}
+                />
+                {ruleLabel}
+              </label>
+            )}
+            {!noteOpen && (
+              <button className={styles.noteAddBtn} onClick={() => setNoteOpen(true)} title="Add note">+</button>
+            )}
+          </div>
+
+          {/* Note input — only visible after clicking + */}
+          {noteOpen && (
+            <input
+              type="text"
+              value={localNote}
+              onChange={e => onNoteChange(e.target.value)}
+              onBlur={() => { if (!localNote) setNoteOpen(false) }}
+              placeholder="note…"
+              className={styles.reviewNote}
+              autoFocus
+            />
           )}
         </div>
       </td>
+
+      <td className={styles.center}>
+        <button
+          className={txn.is_one_time ? styles.oneTimeOn : styles.oneTimeOff}
+          onClick={onToggleOneTime}
+          title={txn.is_one_time ? 'One-time — click to unmark' : 'Mark as one-time (excluded from burn rate)'}
+        >
+          1×
+        </button>
+      </td>
+
       <td className={styles.center}>
         <button className={styles.confirmBtn} onClick={onConfirm} title="Confirm this category">
           ✓
@@ -584,7 +652,7 @@ function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatC
 
 // ── Auto-confirmed section (confirmed tab) ─────────────────────────────────────
 
-function AutoConfirmedSection({ transactions, categories, subcategoryMap, localCats, onCatChange, onSave, lastImportFiles, autoOpen, onToggle, loading }) {
+function AutoConfirmedSection({ transactions, categories, subcategoryMap, localCats, onCatChange, onSave, onToggleOneTime, lastImportFiles, autoOpen, onToggle, loading }) {
   if (loading) return <div className={styles.empty}>Loading…</div>
 
   return (
@@ -618,6 +686,7 @@ function AutoConfirmedSection({ transactions, categories, subcategoryMap, localC
                   <th>Account</th>
                   <th>Category</th>
                   <th>Subcategory</th>
+                  <th className={styles.center} title="One-time — excluded from burn rate">1×</th>
                   <th className={styles.center}>Override</th>
                 </tr>
               </thead>
@@ -651,6 +720,15 @@ function AutoConfirmedSection({ transactions, categories, subcategoryMap, localC
                         }
                       </td>
                       <td className={styles.center}>
+                        <button
+                          className={txn.is_one_time ? styles.oneTimeOn : styles.oneTimeOff}
+                          onClick={() => onToggleOneTime(txn)}
+                          title={txn.is_one_time ? 'One-time — click to unmark' : 'Mark as one-time'}
+                        >
+                          1×
+                        </button>
+                      </td>
+                      <td className={styles.center}>
                         {changed && (
                           <button className={styles.confirmBtn} onClick={() => onSave(txn)} title="Save override">
                             ✓
@@ -665,6 +743,124 @@ function AutoConfirmedSection({ transactions, categories, subcategoryMap, localC
           </div>
         )
       )}
+    </div>
+  )
+}
+
+// ── Add Transaction Modal ───────────────────────────────────────────────────────
+
+const TODAY = new Date().toISOString().split('T')[0]
+
+function AddTransactionModal({ categories, subcategoryMap, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    date: TODAY, description: '', amount: '', type: 'debit',
+    account: '', category: 'other', subcategory: '', notes: '',
+  })
+  const [accounts,  setAccounts]  = useState([])
+  const [saving,    setSaving]    = useState(false)
+  const [error,     setError]     = useState(null)
+
+  useEffect(() => {
+    api.getAccounts().then(setAccounts).catch(() => {})
+  }, [])
+
+  const subOptions = subcategoryMap[form.category] ?? []
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.description.trim() || !form.amount) {
+      setError('Description and amount are required.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await api.addTransaction({
+        date:        form.date,
+        description: form.description.trim(),
+        amount:      parseFloat(form.amount),
+        type:        form.type,
+        account:     form.account || 'chequing',
+        category:    form.category,
+        subcategory: form.subcategory || null,
+        notes:       form.notes.trim() || null,
+        confirmed:   1,
+      })
+      onSaved()
+    } catch (err) {
+      setError(err.message ?? 'Failed to save.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className={styles.modal}>
+        <div className={styles.modalHeader}>
+          <span>Add transaction</span>
+          <button className={styles.modalClose} onClick={onClose}>×</button>
+        </div>
+        <form onSubmit={handleSubmit} className={styles.modalForm}>
+          <div className={styles.modalRow}>
+            <label>Date</label>
+            <input type="date" value={form.date} onChange={e => set('date', e.target.value)} required />
+          </div>
+          <div className={styles.modalRow}>
+            <label>Description</label>
+            <input type="text" value={form.description} onChange={e => set('description', e.target.value)}
+              placeholder="e.g. Coffee shop" autoFocus required />
+          </div>
+          <div className={styles.modalRow}>
+            <label>Amount</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="number" step="0.01" min="0" value={form.amount}
+                onChange={e => set('amount', e.target.value)} placeholder="0.00" required style={{ width: 110 }} />
+              <label className={styles.typeToggle}>
+                <input type="radio" name="type" value="debit"  checked={form.type === 'debit'}  onChange={() => set('type', 'debit')} /> debit
+              </label>
+              <label className={styles.typeToggle}>
+                <input type="radio" name="type" value="credit" checked={form.type === 'credit'} onChange={() => set('type', 'credit')} /> credit
+              </label>
+            </div>
+          </div>
+          <div className={styles.modalRow}>
+            <label>Account</label>
+            <input type="text" list="account-list" value={form.account}
+              onChange={e => set('account', e.target.value)} placeholder="chequing" />
+            <datalist id="account-list">
+              {accounts.map(a => <option key={a} value={a} />)}
+            </datalist>
+          </div>
+          <div className={styles.modalRow}>
+            <label>Category</label>
+            <select value={form.category} onChange={e => { set('category', e.target.value); set('subcategory', '') }}>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          {subOptions.length > 0 && (
+            <div className={styles.modalRow}>
+              <label>Subcategory</label>
+              <select value={form.subcategory} onChange={e => set('subcategory', e.target.value)}>
+                <option value="">— none —</option>
+                {subOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          )}
+          <div className={styles.modalRow}>
+            <label>Note</label>
+            <input type="text" value={form.notes} onChange={e => set('notes', e.target.value)}
+              placeholder="optional" />
+          </div>
+          {error && <div className={styles.modalError}>{error}</div>}
+          <div className={styles.modalFooter}>
+            <button type="button" onClick={onClose} className={styles.btnSecondary}>Cancel</button>
+            <button type="submit" className={styles.btnPrimary} disabled={saving}>
+              {saving ? 'Saving…' : 'Add transaction'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
