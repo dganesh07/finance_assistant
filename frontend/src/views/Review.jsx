@@ -18,6 +18,75 @@ import styles from './Review.module.css'
  *   • ✓ button         → confirms the row and moves it to Confirmed tab
  */
 
+// ── Categorization cheat-sheet rules ───────────────────────────────────────────
+const CHEAT_RULES = [
+  {
+    group: 'Transfers (not fees or expenses)',
+    color: 'var(--blue)',
+    rules: [
+      { match: 'Credit card payment',       hint: 'PREAUTHORIZEDPAYMENT / TDVISAPREAUTHPYMT',  cat: 'transfer' },
+      { match: 'Account-to-account move',   hint: 'large round amount between your own accounts', cat: 'transfer' },
+      { match: 'Questrade deposit',         hint: 'QUESTRADEINC MSP',                           cat: 'investment' },
+    ],
+  },
+  {
+    group: 'Credits & refunds',
+    color: 'var(--green)',
+    rules: [
+      { match: 'Merchant refund / return',  hint: 'positive (credit) amount from a store',      cat: 'refund' },
+      { match: 'Received from work / EI',   hint: 'payroll or government deposit',              cat: 'income → work' },
+      { match: 'Transfer from savings',     hint: 'money moved from EQ / TFSA into chequing',  cat: 'transfer' },
+    ],
+  },
+  {
+    group: 'Easy mix-ups',
+    color: 'var(--amber)',
+    rules: [
+      { match: 'Costco',                    hint: 'bulk grocery store',                         cat: 'groceries' },
+      { match: 'Amazon / AMZN',             hint: 'marketplace purchases',                      cat: 'shopping' },
+      { match: 'COMPASS card',              hint: 'TransLink transit top-up',                   cat: 'transport → transit' },
+      { match: 'IMPARK / NW PARKING / COV', hint: 'parking lots',                               cat: 'transport → parking' },
+      { match: 'ATM cash withdrawal',       hint: 'bank machine withdrawal',                    cat: 'atm' },
+    ],
+  },
+]
+
+function CheatSheet() {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className={styles.cheatSheet}>
+      <button className={styles.cheatToggle} onClick={() => setOpen(o => !o)}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, marginRight: 4 }}>
+          {open ? '▾' : '▸'}
+        </span>
+        categorization cheat sheet
+        {!open && <span className={styles.cheatHint}>— quirky rules to remember</span>}
+      </button>
+
+      {open && (
+        <div className={styles.cheatBody}>
+          {CHEAT_RULES.map(group => (
+            <div key={group.group} className={styles.cheatGroup}>
+              <div className={styles.cheatGroupLabel} style={{ color: group.color }}>
+                {group.group}
+              </div>
+              {group.rules.map(r => (
+                <div key={r.match} className={styles.cheatRule}>
+                  <span className={styles.cheatMatch}>{r.match}</span>
+                  <span className={styles.cheatArrow}>→</span>
+                  <span className={styles.cheatCat}>{r.cat}</span>
+                  <span className={styles.cheatNote}>{r.hint}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Review({ onConfirm }) {
   const [tab,                setTab]                = useState('needs_review')
   const [transactions,       setTransactions]       = useState([])
@@ -87,7 +156,7 @@ export default function Review({ onConfirm }) {
       return
     }
 
-    const effectiveSub = localSubs[txn.id] ?? txn.subcategory ?? null
+    const effectiveSub = (localSubs[txn.id] ?? txn.subcategory) || null
 
     // Save as permanent correction rule if toggled (works for AI guesses too)
     if (saveAsRule[txn.id]) {
@@ -232,6 +301,9 @@ export default function Review({ onConfirm }) {
           </div>
         )}
       </div>
+
+      {/* ── Cheat sheet ── */}
+      {tab === 'needs_review' && <CheatSheet />}
 
       {/* ── Parse status banner ── */}
       {parseStatus === 'running' && (
@@ -387,6 +459,7 @@ export default function Review({ onConfirm }) {
         <AutoConfirmedSection
           transactions={transactions}
           categories={categories}
+          subcategoryMap={subcategoryMap}
           localCats={confirmedLocalCats}
           onCatChange={(id, cat) => setConfirmedLocalCats(p => ({ ...p, [id]: cat }))}
           onSave={saveConfirmedEdit}
@@ -511,7 +584,7 @@ function ReviewRow({ txn, categories, subcategoryMap, localCat, localSub, onCatC
 
 // ── Auto-confirmed section (confirmed tab) ─────────────────────────────────────
 
-function AutoConfirmedSection({ transactions, categories, localCats, onCatChange, onSave, lastImportFiles, autoOpen, onToggle, loading }) {
+function AutoConfirmedSection({ transactions, categories, subcategoryMap, localCats, onCatChange, onSave, lastImportFiles, autoOpen, onToggle, loading }) {
   if (loading) return <div className={styles.empty}>Loading…</div>
 
   return (
@@ -544,6 +617,7 @@ function AutoConfirmedSection({ transactions, categories, localCats, onCatChange
                   <th className={styles.right}>Amount</th>
                   <th>Account</th>
                   <th>Category</th>
+                  <th>Subcategory</th>
                   <th className={styles.center}>Override</th>
                 </tr>
               </thead>
@@ -552,6 +626,7 @@ function AutoConfirmedSection({ transactions, categories, localCats, onCatChange
                   const localCat = localCats[txn.id] ?? txn.category
                   const changed  = localCat !== txn.category
                   const isDebit  = txn.type === 'debit'
+                  const sub      = txn.subcategory
                   return (
                     <tr key={txn.id} className={styles.row}>
                       <td className={styles.date}>{txn.date}</td>
@@ -568,6 +643,12 @@ function AutoConfirmedSection({ transactions, categories, localCats, onCatChange
                         >
                           {categories.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
+                      </td>
+                      <td>
+                        {sub
+                          ? <span className={styles.catBadge} style={{ opacity: 0.7 }}>{sub}</span>
+                          : <span style={{ color: 'var(--muted)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>—</span>
+                        }
                       </td>
                       <td className={styles.center}>
                         {changed && (

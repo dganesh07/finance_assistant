@@ -65,10 +65,10 @@ FIXED_CATEGORIES = {"rent", "utilities", "subscriptions", "insurance"}
 CATEGORIES = [
     "groceries",
     "food",
-    "cannabis",
+    "lifestyle",
     "shopping",
-    "hobbies",
     "self_care",
+    "hobbies",
     "health",
     "subscriptions",
     "transport",
@@ -91,13 +91,14 @@ CATEGORIES = [
 # Add to a list here when you find a new recurring subcategory you want to track.
 SUBCATEGORIES: dict[str, list[str]] = {
     "transport":     ["gas", "parking", "transit", "rideshare", "car_service", "car_repair"],
-    "health":        ["supplements", "pharmacy", "doctor_visit", "dental", "therapy", "emergency"],
+    "health":        ["pharmacy", "doctor_visit", "dental", "therapy", "emergency", "fitness"],
     "food":          [],
     "groceries":     [],
     "shopping":      ["clothing", "household"],
-    "subscriptions": ["streaming", "app", "cloud_storage", "ai_tool"],
+    "lifestyle":     ["weed", "impluse", "small_spends"],
     "self_care":     ["massage", "skincare", "spa", "grooming"],
     "hobbies":       ["games", "spiritual", "books", "art_supplies"],
+    "subscriptions": ["streaming", "app", "cloud_storage", "ai_tool", "membership"],
     "travel":        [],
     "fees":          ["bank_fees", "atm"],
     "utilities":     ["internet", "phone", "electricity"],
@@ -107,5 +108,5 @@ SUBCATEGORIES: dict[str, list[str]] = {
     "refund":        [],
     "transfer":      [],
     "investment":    [],
-    "other":         [],
+    
 }

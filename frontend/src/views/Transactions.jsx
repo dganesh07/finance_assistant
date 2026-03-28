@@ -59,10 +59,18 @@ export default function Transactions() {
 
   const saveEdit = async (id) => {
     if (!editing || editing.id !== id) return
-    await api.updateTransaction(id, { category: editing.category,
-                                       subcategory: editing.subcategory || null })
+    // If the chosen category has no subcategories, always clear it
+    const subAllowed = subcategoryMap[editing.category] ?? []
+    const sub = subAllowed.length > 0 ? (editing.subcategory || null) : null
+    await api.updateTransaction(id, { category: editing.category, subcategory: sub })
+    // Patch local state directly — avoids re-fetch which resets scroll position
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === id ? { ...t, category: editing.category, subcategory: sub } : t
+      ),
+    }))
     setEditing(null)
-    load()
   }
 
   // ── One-time toggle ─────────────────────────────────────────────────────────
@@ -162,15 +170,11 @@ export default function Transactions() {
                     {/* ── Category ── */}
                     <td>
                       {isEditing ? (
-                        <div className={styles.inlineEdit}>
-                          <select autoFocus value={editing.category}
-                            onChange={e => setEditing(p => ({ ...p, category: e.target.value, subcategory: '' }))}
-                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}>
-                            {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                          </select>
-                          <button className={styles.saveBtn} onClick={() => saveEdit(txn.id)}>Save</button>
-                          <button className={styles.cancelBtn} onClick={() => setEditing(null)}>×</button>
-                        </div>
+                        <select autoFocus value={editing.category}
+                          onChange={e => setEditing(p => ({ ...p, category: e.target.value, subcategory: '' }))}
+                          onKeyDown={e => { if (e.key === 'Enter') saveEdit(txn.id); if (e.key === 'Escape') setEditing(null) }}>
+                          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
                       ) : (
                         <span className={styles.catBadge} onClick={() => startEdit(txn)} title="Click to edit">
                           {txn.category}
@@ -189,8 +193,14 @@ export default function Transactions() {
                             <option value="">— none —</option>
                             {subOptions.map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
+                        ) : editing.subcategory ? (
+                          // Stale subcategory from a previous category — show it so user can clear it
+                          <span className={styles.staleSub}>
+                            {editing.subcategory}
+                            <button onClick={() => setEditing(p => ({ ...p, subcategory: '' }))} title="Clear subcategory">×</button>
+                          </span>
                         ) : (
-                          <span style={{ color: 'var(--muted)', fontSize: 10 }}>no subcategories</span>
+                          <span style={{ color: 'var(--muted)', fontSize: 10 }}>—</span>
                         )
                       ) : txn.subcategory ? (
                         <span className={styles.subBadge} onClick={() => startEdit(txn)} title="Click to edit">
@@ -201,20 +211,29 @@ export default function Transactions() {
                       )}
                     </td>
 
+                    {/* ── Confirmed / Save ── */}
                     <td className={styles.center}>
-                      {txn.confirmed
-                        ? <span style={{ color: 'var(--green)' }}>✓</span>
-                        : <span style={{ color: 'var(--muted)' }}>—</span>}
+                      {isEditing ? (
+                        <button className={styles.saveBtn} onClick={() => saveEdit(txn.id)} title="Save">✓</button>
+                      ) : txn.confirmed ? (
+                        <span style={{ color: 'var(--green)' }}>✓</span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)' }}>—</span>
+                      )}
                     </td>
 
-                    {/* ── One-time toggle ── */}
+                    {/* ── One-time toggle / Cancel ── */}
                     <td className={styles.center}>
-                      <button
-                        className={txn.is_one_time ? styles.oneTimeOn : styles.oneTimeOff}
-                        onClick={() => toggleOneTime(txn)}
-                        title={txn.is_one_time ? 'One-time — click to unmark' : 'Mark as one-time'}>
-                        1×
-                      </button>
+                      {isEditing ? (
+                        <button className={styles.cancelBtn} onClick={() => setEditing(null)} title="Cancel">×</button>
+                      ) : (
+                        <button
+                          className={txn.is_one_time ? styles.oneTimeOn : styles.oneTimeOff}
+                          onClick={() => toggleOneTime(txn)}
+                          title={txn.is_one_time ? 'One-time — click to unmark' : 'Mark as one-time'}>
+                          1×
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )

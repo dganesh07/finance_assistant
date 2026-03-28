@@ -95,6 +95,29 @@
 
 .subSelect { width: 130px; font-size: 11px; }
 
+/* Stale subcategory shown in edit mode when category has no subcategory options */
+.staleSub {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber);
+  background: var(--amber-dim, #292318);
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.staleSub button {
+  background: none;
+  color: var(--amber);
+  font-size: 12px;
+  padding: 0 1px;
+  line-height: 1;
+  cursor: pointer;
+}
+.staleSub button:hover { color: var(--text); }
+
 /* Inline edit */
 .inlineEdit {
   display: flex;
@@ -105,17 +128,29 @@
 .saveBtn {
   background: var(--green-dim);
   color: var(--green);
-  padding: 4px 8px;
-  font-size: 11px;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  border-radius: var(--radius);
 }
 .saveBtn:hover { background: var(--green); color: #0d0f14; }
 .cancelBtn {
   background: none;
   color: var(--muted);
-  font-size: 14px;
-  padding: 2px 6px;
+  font-size: 16px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  border-radius: var(--radius);
 }
-.cancelBtn:hover { color: var(--text); }
+.cancelBtn:hover { color: var(--text); background: var(--surface2); }
 
 /* One-time toggle */
 .oneTimeOff {

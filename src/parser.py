@@ -955,13 +955,9 @@ _PRECATEGORY_RULES: list[tuple[re.Pattern, str, int]] = [
     # Incoming e-transfers / deposits from another account — certain
     (re.compile(r"RECV\s*TFR|RECEIVE\s*TRANSFER|INTERNET\s*TRANSFER", re.IGNORECASE), "transfer", 1),
 
-    # ── Income ────────────────────────────────────────────────────────────────
-    (re.compile(r"PAYROLL|DIRECT\s*DEP|DIRECT\s*DEPOSIT", re.IGNORECASE), "income", 1),
-
-    # ── Bank fees (then rebated) ───────────────────────────────────────────────
-    (re.compile(r"MONTHLYACCOUNTFEE|MONTHLY\s*ACCOUNT\s*FEE", re.IGNORECASE), "fees", 1),
-    (re.compile(r"ACCTFEEREBATE|ACCOUNT\s*FEE\s*REBATE", re.IGNORECASE), "fees", 1),
 ]
+# Note: income (PAYROLL, DIRECT DEP) and bank fees (MONTHLYACCOUNTFEE, ACCTFEEREBATE)
+# are handled in corrections.json so they are visible and editable.
 
 
 def precategorize(description: str) -> tuple[str, int]:
@@ -997,9 +993,9 @@ def _load_corrections_for_parser() -> dict:
         return {}
 
 
-def _corrections_category(description: str, corrections: dict) -> Optional[tuple[str, int]]:
+def _corrections_category(description: str, corrections: dict) -> Optional[tuple[str, Optional[str], int]]:
     """
-    Return (category, confirmed=1) if any corrections key is a substring of
+    Return (category, subcategory, confirmed=1) if any corrections key is a substring of
     description (case-insensitive), else None.
 
     Matches the same logic as the AI categorizer so that corrections applied
@@ -1008,7 +1004,7 @@ def _corrections_category(description: str, corrections: dict) -> Optional[tuple
     desc_upper = description.upper()
     for key, override in corrections.items():
         if key in desc_upper:
-            return override.get("category", "other"), 1
+            return override.get("category", "other"), override.get("subcategory"), 1
     return None
 
 
@@ -1056,19 +1052,20 @@ def insert_transactions(
             # 1. corrections.json wins — instant, no LLM needed
             corr = _corrections_category(row["description"], corrections)
             if corr:
-                category, confirmed = corr
+                category, subcategory, confirmed = corr
             else:
-                # 2. hardcoded precategory rules
+                # 2. hardcoded precategory rules (no subcategory at this stage)
                 category, confirmed = precategorize(row["description"])
+                subcategory = None
 
             conn.execute(
                 """
                 INSERT INTO transactions
-                  (date, description, amount, type, account, category, confirmed, source_file, hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  (date, description, amount, type, account, category, subcategory, confirmed, source_file, hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (row["date"], row["description"], row["amount"],
-                 row["type"], account, category, confirmed, source_file, h)
+                 row["type"], account, category, subcategory, confirmed, source_file, h)
             )
             inserted += 1
 

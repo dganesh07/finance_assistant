@@ -269,7 +269,10 @@ def update_transaction(txn_id: int, body: TransactionUpdate):
 
     fields, params = [], []
     if body.category    is not None: fields.append("category = ?");    params.append(body.category)
-    if body.subcategory is not None: fields.append("subcategory = ?"); params.append(body.subcategory)
+    # subcategory uses model_fields_set so an explicit null clears the value in DB
+    if "subcategory" in body.model_fields_set:
+        fields.append("subcategory = ?")
+        params.append(body.subcategory or None)   # empty string also clears
     if body.confirmed   is not None: fields.append("confirmed = ?");   params.append(body.confirmed)
     if body.is_one_time is not None: fields.append("is_one_time = ?"); params.append(body.is_one_time)
     if body.notes       is not None: fields.append("notes = ?");       params.append(body.notes)
