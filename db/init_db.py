@@ -4,7 +4,8 @@ db/init_db.py — Initialize the SQLite database.
 Run standalone:  python db/init_db.py
 Or imported:     from db.init_db import initialize_db
 
-Creates finance.db and all five tables from schema.sql if they don't exist yet.
+Creates finance.db and all tables from schema.sql if they don't exist yet.
+Tables: transactions, account_balances, spending_periods, bills, vehicles, reports, todo_items.
 Safe to call multiple times — uses IF NOT EXISTS throughout.
 """
 

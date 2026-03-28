@@ -10,19 +10,19 @@ No cloud sync, no third-party services beyond Google Sheets (optional). Everythi
 
 ```
 finance-assistant/
-├── api.py                        ← FastAPI backend (20 endpoints, port 8000)
+├── api.py                        ← FastAPI backend (25 endpoints, port 8000)
 ├── config.py                     ← all paths, categories, Google Sheets config, BURN_RATE_START
 ├── dev.sh                        ← starts backend + frontend together
 ├── run.py                        ← quick CLI entry point (DB init + parse new statements)
 ├── db/
 │   ├── schema.sql                ← SQLite table definitions (7 tables)
-│   └── init_db.py                ← creates finance.db from schema
+│   └── init_db.py                ← creates finance.db from schema + runs additive migrations
 ├── src/
 │   ├── parser.py                 ← TD Bank PDF + CSV parsing, dedup, balance reconciliation
 │   ├── categorizer.py            ← corrections rules + Ollama AI categorizer pipeline
 │   ├── context_builder.py        ← assembles DB + files into LLM-ready context block
 │   ├── sheets_connector.py       ← reads account balances live from Google Sheets
-│   └── reporter.py               ← report agent stub (not yet implemented)
+│   └── reporter.py               ← AI insights agent (Ollama or Claude backend)
 ├── frontend/                     ← React + Vite UI (Dashboard, Monthly, Review, Transactions)
 ├── scripts/
 │   ├── ingest.py                 ← interactive full pipeline: parse → AI → review → save
@@ -31,15 +31,19 @@ finance-assistant/
 │   ├── review.py                 ← terminal-based transaction review
 │   ├── reset_and_reimport.py     ← wipe + re-parse all statements
 │   ├── inspect_raw.py            ← debug raw pdfplumber output for a PDF
-│   ├── test_sheets.py            ← test Google Sheets connection
-│   └── wipe_db.py                ← clear all transaction rows (schema intact)
+│   ├── seed_db.py                ← snapshot current DB as finance.db.seed
+│   ├── restore_seed.py           ← restore DB from finance.db.seed (after a dev wipe)
+│   ├── wipe_db.py                ← clear all transaction rows (schema intact)
+│   └── test_sheets.py            ← test Google Sheets connection
 ├── tests/
+│   ├── test_api.py               ← unit tests for FastAPI endpoints (TestClient, no LLM)
 │   ├── test_context_builder.py   ← unit tests for context builder helpers
-│   └── test_categorizer.py       ← unit tests for categorizer (mocked Ollama, no LLM needed)
+│   ├── test_categorizer.py       ← unit tests for categorizer (mocked Ollama, no LLM needed)
+│   └── test_sheets_connector.py  ← unit tests for Sheets column-matching logic
 ├── data/
 │   └── statements/               ← drop PDFs / CSVs here (git-ignored)
 ├── docs/
-│   └── finance-app-architecture.html  ← visual architecture reference (needs updating)
+│   └── architecture.md           ← architecture diagrams and data flow reference
 ├── bills.local.json              ← recurring bills config (git-ignored)
 ├── bills.example.json            ← template — copy to bills.local.json
 ├── profile.txt                   ← your financial context for the AI (git-ignored)
@@ -149,12 +153,13 @@ The workflow:
 Per-row actions:
 - Change the category/subcategory dropdown
 - Click "save as rule" to write the merchant → category to `corrections.json` permanently
-- Mark as one-time to exclude from burn rate calculations
+- Click `+` to add a note (stored with the transaction; visible as a tooltip on the Transactions page)
+- Click `1×` to mark as one-time — excluded from burn rate calculations
 - Confirm to lock the category
 
 ### Browse transactions
 
-Go to **Transactions** in the UI. Filters: text search, category, date range, month picker. Click a category badge to edit inline. Click "1×" to toggle the one-time flag.
+Go to **Transactions** in the UI. Filters: text search, category, date range, month picker. Click a category badge to edit inline. Click the `note` badge or `+` to add/edit notes inline. Click `1×` to toggle the one-time flag.
 
 ### Monthly breakdown
 
@@ -212,11 +217,27 @@ python scripts/test_sheets.py
 python scripts/check_db.py
 ```
 
+### Snapshot and restore your real data during development
+
+When your real transaction data is in a good state and you want to wipe the DB for testing without losing your work:
+
+```bash
+# Save current DB as a seed snapshot
+python scripts/seed_db.py
+
+# After testing / wiping — restore your real data
+python scripts/restore_seed.py
+```
+
+`finance.db.seed` is git-ignored. The seed is a plain SQLite copy — no special tooling needed to inspect it.
+
 ### Run tests
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+Tests require no LLM, no network, and no real DB — they use in-memory SQLite and mocked backends.
 
 ---
 

@@ -4,27 +4,35 @@ api.py — FastAPI backend for the Finance Agent dashboard.
 Run:
   uvicorn api:app --reload --port 8000
 
-Endpoints:
-  GET  /api/summary                       — spending summary + runway
-  GET  /api/transactions                  — all transactions (filterable)
-  GET  /api/transactions/review           — unconfirmed transactions only
-  PATCH /api/transactions/{id}            — update category / confirm a row
-  POST /api/transactions/confirm-all      — confirm multiple transactions by IDs
-  GET  /api/bills                         — bills from bills.json
-  POST /api/apply-corrections             — apply corrections.json to all unknowns (fast, no LLM)
-  POST /api/run-categorizer               — trigger Ollama categorizer in background
-  GET  /api/job/{job_id}                  — poll background job status
-  GET  /api/categories                    — full category list from config
-  GET  /api/subcategories                 — subcategory map { category: [subcategory, ...] }
-  GET  /api/monthly                       — per-month breakdown with completeness flags
-  GET  /api/monthly-subcategories?month=  — subcategory drill-down for a specific month
-  GET  /api/spending-periods              — all months with is_complete + statement date ranges
-  POST /api/parse-statements              — scan statements folder, save raw rows to DB
-  GET  /api/statements                    — list files in data/statements/
-  GET  /api/corrections                   — view all rules in corrections.json
-  POST /api/corrections                   — add/update a correction rule
-  DELETE /api/corrections/{key}           — remove a correction rule
-  GET  /api/context                       — full LLM-ready financial context block
+Endpoints (25 total):
+  GET    /api/categories                    — full category list from config
+  GET    /api/subcategories                 — subcategory map { category: [subcategory, ...] }
+  GET    /api/bills                         — bills from bills.local.json
+  GET    /api/accounts                      — distinct account names in the DB
+  GET    /api/summary                       — spending summary for last N days
+  GET    /api/monthly                       — per-month breakdown with completeness flags
+  GET    /api/monthly-subcategories?month=  — subcategory drill-down for a specific month
+  GET    /api/spending-periods              — all months with is_complete + statement date ranges
+  GET    /api/dashboard                     — hybrid dashboard: stat cards, category table, one-times
+  GET    /api/transactions/review           — unconfirmed transactions only
+  GET    /api/transactions                  — all transactions (search, category, date, paginated)
+  PATCH  /api/transactions/{id}             — update any editable field (category, notes, is_one_time…)
+  POST   /api/transactions                  — manually add a transaction
+  POST   /api/transactions/confirm-all      — confirm multiple transactions by IDs
+  POST   /api/run-categorizer               — trigger Ollama categorizer in background
+  POST   /api/apply-corrections             — apply corrections.json to all unknowns (fast, no LLM)
+  GET    /api/job/{job_id}                  — poll background job status
+  GET    /api/source-files                  — list distinct source files with row counts + latest date
+  GET    /api/statements                    — list files in data/statements/ folder
+  POST   /api/parse-statements              — scan statements folder, save raw rows to DB
+  GET    /api/context                       — full LLM-ready financial context block (plain text)
+  POST   /api/insights                      — generate AI insights from context (Ollama or Claude)
+  GET    /api/corrections                   — view all rules in corrections.json
+  POST   /api/corrections                   — add/update a correction rule
+  DELETE /api/corrections/{key}             — remove a correction rule
+
+Note: Background categorizer jobs are tracked in _jobs (in-memory dict). Job state is lost
+if the server restarts mid-run — the client should handle a missing job_id gracefully.
 """
 
 import json
@@ -120,7 +128,9 @@ def get_summary(days: int = 60):
     Spending summary for the last N days.
 
     - total_in / total_out exclude transfers and fee rebates (same logic as check_db)
-    - runway_months = total_in / avg_monthly_spend (rough estimate)
+    - runway_months = total_in / avg_monthly_spend — NOTE: approximate only.
+      TD credits are mostly internal transfers (not income); for accurate runway
+      use GET /api/dashboard which reads the TD Chequing balance from account_balances.
     - review_count = transactions with confirmed=0
     """
     period_start = (date.today() - timedelta(days=days)).isoformat()
