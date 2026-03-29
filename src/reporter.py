@@ -205,6 +205,17 @@ def generate_insights(context: str, month: str = "current") -> list[dict]:
     system = _load_system_prompt()
     user   = f"Analyse month: {month}\n\n{context}"
 
+    sep = "─" * 60
+    print(f"\n{sep}")
+    print(f"[reporter] backend={REPORT_BACKEND}  model={REPORT_MODEL}")
+    print(f"{sep}")
+    print("[reporter] SYSTEM PROMPT:")
+    print(system)
+    print(f"{sep}")
+    print("[reporter] USER MESSAGE:")
+    print(user)
+    print(f"{sep}\n")
+
     if REPORT_BACKEND == "claude":
         return _call_claude(system, user)
     else:

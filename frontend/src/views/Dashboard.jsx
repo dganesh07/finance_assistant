@@ -32,6 +32,46 @@ const catColor = c => CAT_COLORS[c] ?? '#60a5fa'
 const fmt  = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 0 })}`
 const fmtd = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
 
+const ACCT_SHORT = { chequing: 'CHQ', creditcard: 'CC', savings: 'SAV', loc: 'LOC' }
+const acctShort  = a => ACCT_SHORT[a] ?? a.toUpperCase().slice(0, 4)
+
+const fmtDate = iso => {
+  if (!iso) return '?'
+  const [y, m, d] = iso.split('-')
+  const mon = new Date(Number(y), Number(m) - 1).toLocaleString('en-CA', { month: 'short' })
+  return `${mon} ${Number(d)}`
+}
+
+function AccountBadges({ accounts }) {
+  if (!accounts?.length) return null
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {accounts.map(a => (
+        <span
+          key={a.account}
+          title={
+            a.statement_start && a.statement_end
+              ? `${fmtDate(a.statement_start)} → ${fmtDate(a.statement_end)}`
+              : a.account
+          }
+          style={{
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            padding: '1px 6px',
+            borderRadius: 3,
+            background: a.covers_month ? '#1a3a1a' : '#2a2010',
+            color:      a.covers_month ? '#4ade80'  : '#f59e0b',
+            border:    `1px solid ${a.covers_month ? '#4ade8033' : '#f59e0b33'}`,
+            cursor: 'default',
+          }}
+        >
+          {acctShort(a.account)} {a.covers_month ? '✓' : '~'}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function monthLabel(ym) {
   const [y, m] = ym.split('-')
   return new Date(Number(y), Number(m) - 1).toLocaleString('en-CA', { month: 'long', year: 'numeric' })
@@ -39,7 +79,7 @@ function monthLabel(ym) {
 
 // ── Stat card with month-over-month delta ────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent, curr, prev, deltaInvert }) {
+function StatCard({ label, value, sub, accent, curr, prev, deltaInvert, tooltip }) {
   let delta = null
   if (prev && prev > 0) delta = ((curr - prev) / prev) * 100
 
@@ -50,7 +90,7 @@ function StatCard({ label, value, sub, accent, curr, prev, deltaInvert }) {
     : (up !== !!deltaInvert) ? 'var(--green)' : 'var(--red)'
 
   return (
-    <div className={styles.card}>
+    <div className={`${styles.card}${tooltip ? ' ' + styles.cardHasTooltip : ''}`}>
       <div className={styles.cardLabel}>{label}</div>
       <div className={styles.cardValue} style={{ color: accent }}>{value}</div>
       {sub && <div className={styles.cardSub}>{sub}</div>}
@@ -59,6 +99,7 @@ function StatCard({ label, value, sub, accent, curr, prev, deltaInvert }) {
           {up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs prev
         </div>
       )}
+      {tooltip && <div className={styles.cardTooltip}>{tooltip}</div>}
     </div>
   )
 }
@@ -340,11 +381,12 @@ export default function Dashboard() {
 
       {/* ── Header ── */}
       <div className={styles.header}>
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <h1 className={styles.title}>// dashboard</h1>
           <p className={styles.subtitle}>
             {monthLabel(data.month)} · {txn_count} transactions
           </p>
+          <AccountBadges accounts={data.accounts_covered} />
         </div>
         <select
           value={data.month}
@@ -386,6 +428,10 @@ export default function Dashboard() {
           value={runway_months != null ? `${runway_months} mo` : '—'}
           sub="at current burn"
           accent="var(--amber)"
+          tooltip={data.td_balance != null
+            ? `TD Chequing: ${fmtd(data.td_balance)}${data.td_balance_as_of ? ` · ${data.td_balance_as_of} stmt` : ''}`
+            : null
+          }
         />
       </div>
 

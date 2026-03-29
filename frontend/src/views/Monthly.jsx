@@ -6,15 +6,6 @@ import {
 import { api } from '../api.js'
 import styles from './Monthly.module.css'
 
-/*
- * Monthly view — side-by-side monthly spending breakdown.
- *
- * Shows:
- *   - One summary card per month (total out / income / net)
- *   - Category comparison table: rows = categories, columns = months
- *   - Month-over-month delta on the two most recent months
- */
-
 const fmt = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
 
 const MONTH_LABEL = label => {
@@ -119,7 +110,7 @@ function MonthCard({ month, isLatest }) {
 
 // ── Category comparison table ───────────────────────────────────────────────────
 
-function CategoryTable({ months }) {
+function CategoryTable({ months, onCategoryClick }) {
   // months is ordered newest-first from API — reverse to show oldest → newest left-to-right
   const ordered = [...months].reverse()
 
@@ -177,8 +168,14 @@ function CategoryTable({ months }) {
             const delta     = pctChange(prevTotal, currTotal)
 
             return (
-              <tr key={cat} className={styles.row}>
-                <td className={styles.catCell}>{cat}</td>
+              <tr
+                key={cat}
+                className={`${styles.row} ${styles.rowClickable}`}
+                onClick={() => onCategoryClick(cat, latestLabel)}
+              >
+                <td className={styles.catCell}>
+                  {cat} <span className={styles.drillHint}>›</span>
+                </td>
                 {ordered.map(mo => {
                   const row = lookup[mo.label]?.[cat]
                   return (
@@ -250,10 +247,7 @@ function CategoryTable({ months }) {
   )
 }
 
-// ── Subcategory drill-down chart ────────────────────────────────────────────────
-// TODO: move this panel into the month reporter / drill-down view once that
-//       exists.  For now it lives here as a read-only panel — pick a month,
-//       see every subcategory broken out as a bar, coloured by parent category.
+// ── Subcategory drill-down drawer ───────────────────────────────────────────────
 
 const CAT_COLORS = {
   food: '#f59e0b', groceries: '#4ade80', transport: '#60a5fa',
@@ -273,88 +267,86 @@ function SubcatTooltip({ active, payload }) {
       background: '#1a1a1a', border: '1px solid #333', borderRadius: 6,
       padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12,
     }}>
-      <div style={{ color: catColor(d.category), marginBottom: 2 }}>{d.category}</div>
       <div style={{ color: '#e2e8f0' }}>{d.subcategory ?? '(uncategorised)'}</div>
       <div style={{ color: '#94a3b8' }}>${d.total.toFixed(2)} · {d.count} txns</div>
     </div>
   )
 }
 
-function SubcategoryChart({ months }) {
-  const latestMonth = months[0]?.label  // months are newest-first from API
+function SubcatDrawer({ category, months, onClose }) {
+  const latestMonth = months[0]?.label
   const [selectedMonth, setSelectedMonth] = useState(latestMonth)
   const [subcats, setSubcats]             = useState([])
   const [loading, setLoading]             = useState(false)
-
-  // keep selectedMonth in sync when months data changes
-  useEffect(() => {
-    if (latestMonth && !selectedMonth) setSelectedMonth(latestMonth)
-  }, [latestMonth])
 
   useEffect(() => {
     if (!selectedMonth) return
     setLoading(true)
     api.getMonthlySubcats(selectedMonth)
-      .then(rows => {
-        // keep only rows that have a subcategory assigned
-        setSubcats(rows.filter(r => r.subcategory))
-      })
+      .then(rows => setSubcats(rows.filter(r => r.subcategory && r.category === category)))
       .finally(() => setLoading(false))
-  }, [selectedMonth])
+  }, [selectedMonth, category])
 
-  if (!latestMonth) return null
-
-  // sort by total desc for a tidy chart
   const chartData = [...subcats].sort((a, b) => b.total - a.total)
+  const color     = catColor(category)
 
   return (
-    <div>
-      {/* month picker */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{ color: 'var(--subtle)', fontSize: 11 }}>month</span>
-        <select
-          value={selectedMonth}
-          onChange={e => setSelectedMonth(e.target.value)}
-          style={{ fontSize: 12, background: '#1a1a1a', color: '#e2e8f0', border: '1px solid #333', borderRadius: 4, padding: '2px 6px' }}
-        >
-          {months.map(mo => (
-            <option key={mo.label} value={mo.label}>{MONTH_LABEL(mo.label)}</option>
-          ))}
-        </select>
-      </div>
+    <>
+      <div className={styles.drawerOverlay} onClick={onClose} />
+      <div className={styles.drawer}>
+        <div className={styles.drawerHeader}>
+          <div>
+            <span className={styles.drawerCat} style={{ color }}>{category}</span>
+            <span className={styles.drawerSub}>subcategory breakdown</span>
+          </div>
+          <button className={styles.drawerClose} onClick={onClose}>✕</button>
+        </div>
 
-      {loading ? (
-        <p style={{ color: 'var(--subtle)', fontSize: 12 }}>Loading…</p>
-      ) : chartData.length === 0 ? (
-        <p style={{ color: 'var(--subtle)', fontSize: 12 }}>
-          No subcategories assigned for this month yet — run AI or add correction rules.
-        </p>
-      ) : (
-        <ResponsiveContainer width="100%" height={chartData.length * 28 + 20}>
-          <BarChart
-            data={chartData}
-            layout="vertical"
-            margin={{ top: 0, right: 16, left: 0, bottom: 0 }}
-          >
-            <XAxis type="number" hide />
-            <YAxis
-              type="category"
-              dataKey="subcategory"
-              width={130}
-              tick={{ fill: 'var(--subtle)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <Tooltip content={<SubcatTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
-            <Bar dataKey="total" radius={[0, 4, 4, 0]}>
-              {chartData.map((entry, i) => (
-                <Cell key={i} fill={catColor(entry.category)} fillOpacity={0.85} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      )}
-    </div>
+        <div className={styles.drawerMonthPicker}>
+          {months.map(mo => (
+            <button
+              key={mo.label}
+              className={`${styles.drawerMonthBtn} ${selectedMonth === mo.label ? styles.drawerMonthBtnActive : ''}`}
+              onClick={() => setSelectedMonth(mo.label)}
+            >
+              {MONTH_LABEL(mo.label)}
+            </button>
+          ))}
+        </div>
+
+        <div className={styles.drawerBody}>
+          {loading ? (
+            <p className={styles.drawerEmpty}>Loading…</p>
+          ) : chartData.length === 0 ? (
+            <p className={styles.drawerEmpty}>No subcategories for {category} this month.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={chartData.length * 36 + 20}>
+              <BarChart
+                data={chartData}
+                layout="vertical"
+                margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
+              >
+                <XAxis type="number" hide />
+                <YAxis
+                  type="category"
+                  dataKey="subcategory"
+                  width={140}
+                  tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'var(--font-mono)' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip content={<SubcatTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+                  {chartData.map((_, i) => (
+                    <Cell key={i} fill={color} fillOpacity={0.75} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -432,7 +424,8 @@ function OneTimeSection({ months }) {
 export default function Monthly() {
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(true)
-  const [limit,   setLimit]   = useState(6)
+  const [limit,   setLimit]   = useState(4)
+  const [drawer,  setDrawer]  = useState(null) // { category, month } or null
 
   useEffect(() => {
     setLoading(true)
@@ -455,8 +448,7 @@ export default function Monthly() {
         </div>
         <select value={limit} onChange={e => setLimit(Number(e.target.value))}>
           <option value={3}>Last 3 months</option>
-          <option value={6}>Last 6 months</option>
-          <option value={12}>Last 12 months</option>
+          <option value={4}>Last 4 months</option>
         </select>
       </div>
 
@@ -477,19 +469,12 @@ export default function Monthly() {
           <div className={styles.panel}>
             <div className={styles.panelTitle}>
               Regular spending by category
-              <span className={styles.panelNote}>excludes one-time · matches burn rate</span>
+              <span className={styles.panelNote}>excludes one-time · matches burn rate · click row to drill down</span>
             </div>
-            <CategoryTable months={months} />
-          </div>
-
-          {/* ── Subcategory breakdown chart ── */}
-          {/* TODO: move into month reporter drill-down once that view exists */}
-          <div className={styles.panel}>
-            <div className={styles.panelTitle}>
-              Subcategory breakdown
-              <span className={styles.panelNote}>assigned subcategories only · bars coloured by parent category</span>
-            </div>
-            <SubcategoryChart months={months} />
+            <CategoryTable
+              months={months}
+              onCategoryClick={(cat, month) => setDrawer({ category: cat, month })}
+            />
           </div>
 
           {/* ── One-time charges section ── */}
@@ -501,6 +486,15 @@ export default function Monthly() {
               </div>
               <OneTimeSection months={months} />
             </div>
+          )}
+
+          {/* ── Subcategory drawer ── */}
+          {drawer && (
+            <SubcatDrawer
+              category={drawer.category}
+              months={months}
+              onClose={() => setDrawer(null)}
+            />
           )}
         </>
       )}

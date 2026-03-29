@@ -36,6 +36,25 @@
 .cardSub   { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--font-mono); }
 .cardDelta { font-size: 10px; margin-top: 5px; font-family: var(--font-mono); }
 
+.cardHasTooltip { position: relative; cursor: default; }
+.cardTooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+}
+.cardHasTooltip:hover .cardTooltip { display: block; }
+
 /* ── Body: category panel + donut panel ─────────────────────────────────────── */
 .body {
   display: grid;

@@ -992,7 +992,7 @@ def get_dashboard(month: Optional[str] = None):
 
     # ── Runway ─────────────────────────────────────────────────────────────────
     balance_row = conn.execute("""
-        SELECT closing_balance
+        SELECT closing_balance, statement_month
         FROM account_balances
         WHERE account = 'chequing'
         ORDER BY statement_month DESC LIMIT 1
@@ -1000,13 +1000,15 @@ def get_dashboard(month: Optional[str] = None):
     td_balance = balance_row["closing_balance"] if balance_row else None
 
     burn_rows = conn.execute("""
-        SELECT strftime('%Y-%m', date) AS mo,
-               SUM(amount) AS monthly
-        FROM transactions
-        WHERE strftime('%Y-%m', date) >= ?
-          AND type = 'debit'
-          AND category NOT IN ('transfer','fees','investment')
-          AND (is_one_time = 0 OR is_one_time IS NULL)
+        SELECT strftime('%Y-%m', t.date) AS mo,
+               SUM(t.amount) AS monthly
+        FROM transactions t
+        JOIN spending_periods sp ON sp.period_label = strftime('%Y-%m', t.date)
+        WHERE sp.period_label >= ?
+          AND sp.is_complete = 1
+          AND t.type = 'debit'
+          AND t.category NOT IN ('transfer','fees','investment')
+          AND (t.is_one_time = 0 OR t.is_one_time IS NULL)
         GROUP BY mo
     """, (BURN_RATE_START,)).fetchall()
     avg_burn = (
@@ -1042,6 +1044,22 @@ def get_dashboard(month: Optional[str] = None):
         for r in sub_rows
     ]
 
+    acct_rows = conn.execute("""
+        SELECT account, statement_start, statement_end, covers_month
+        FROM account_balances
+        WHERE statement_month = ?
+        ORDER BY account
+    """, (target,)).fetchall()
+    accounts_covered = [
+        {
+            "account":         r["account"],
+            "statement_start": r["statement_start"],
+            "statement_end":   r["statement_end"],
+            "covers_month":    bool(r["covers_month"]),
+        }
+        for r in acct_rows
+    ]
+
     conn.close()
 
     from datetime import date as _date
@@ -1064,11 +1082,14 @@ def get_dashboard(month: Optional[str] = None):
         },
         "fixed_total":    fixed_total,
         "variable_total": variable_total,
-        "runway_months":  runway_months,
-        "avg_burn":       avg_burn,
-        "categories":     categories,
+        "runway_months":    runway_months,
+        "avg_burn":         avg_burn,
+        "td_balance":       round(td_balance, 2) if td_balance is not None else None,
+        "td_balance_as_of": balance_row["statement_month"] if balance_row else None,
+        "accounts_covered": accounts_covered,
+        "categories":       categories,
         "one_time_charges": one_time_charges,
-        "subscriptions":  subscriptions,
+        "subscriptions":    subscriptions,
         "available_months": available,
     }
 
