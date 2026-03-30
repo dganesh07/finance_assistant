@@ -81,45 +81,59 @@ def _find_inv_col(headers: list[str], key: str) -> int | None:
 
 # ── Account grouping logic ────────────────────────────────────────────────────
 
+# ── Sub-Type → group lookup ───────────────────────────────────────────────────
+# The sheet uses a controlled Sub-Type vocabulary. Map each exact value to a
+# display group. Matching is case-insensitive (lowercased before lookup).
+#
+# Current Sub-Type values in use:
+#   Chequing, Savings, HISA, GIC, ETF/Stocks, 401K, RRSP, Shares, Real Estate
+#
+# Add a new row here whenever a new Sub-Type appears in the sheet.
+
+_SUBTYPE_GROUP: dict[str, str] = {
+    "chequing":    "savings",
+    "savings":     "savings",
+    "hisa":        "hisa",
+    "gic":         "gic",
+    "term deposit": "gic",
+    "401k":        "retirement",
+    "rrsp":        "retirement",
+    "shares":      "long_term",   # non-registered long-term investments
+    "real estate": "long_term",   # land, property, illiquid assets
+    # ETF/Stocks is intentionally absent — it's ambiguous (TFSA uses it too).
+    # TFSA is caught first by the name/asset-class check below before this table runs.
+}
+
+
 def _classify_account(name: str, asset_class: str, subtype: str, currency: str) -> str:
     """
     Assign each account row to a logical group for display.
 
     Groups:
-      tfsa        — TFSA accounts (CAD registered)
-      retirement  — 401k, RRSP, pension
-      gic         — GICs / term deposits (Sub-Type = "GIC" or "Term Deposit")
+      tfsa        — TFSA registered account (CAD)
+      retirement  — 401K, RRSP
+      gic         — GICs / term deposits
       hisa        — High-interest savings / emergency fund cash
       savings     — Short-term savings / chequing
-      other       — Everything else included in net worth
+      other       — Everything else (shares, real estate, etc.)
 
-    Priority order matters: a TFSA GIC should classify as "tfsa" not "gic",
-    so TFSA check runs first.
+    Logic:
+      1. TFSA check runs first via name + asset class — its Sub-Type is
+         "ETF/Stocks" which is ambiguous, so we can't rely on the lookup table.
+      2. All other groups resolve from the _SUBTYPE_GROUP lookup (exact match,
+         case-insensitive). Clean Sub-Type values in the sheet = simple code here.
+      3. Anything not in the table falls to "other".
     """
     n, a, s = name.lower(), asset_class.lower(), subtype.lower()
 
-    # TFSA first — a TFSA GIC is still a TFSA for grouping purposes
-    if "tfsa" in n or "tfsa" in a or "tfsa" in s or "long term reg" in a:
+    # TFSA first — must run before the subtype lookup because Sub-Type is ETF/Stocks
+    if "tfsa" in n or "tfsa" in a or "long term reg" in a:
         return "tfsa"
 
-    if any(x in n for x in ("401k", "401(k)", "roth", "rrsp", "pension")):
-        return "retirement"
-    if "retirement" in a or "401k" in s or "rrsp" in s:
-        return "retirement"
-
-    # GIC / term deposit — matched by Sub-Type column
-    if any(x in s for x in ("gic", "term deposit", "term")):
-        return "gic"
-    if any(x in a for x in ("gic", "fixed income", "term deposit")):
-        return "gic"
-
-    if "hisa" in s or "hisa" in n or "emergency fund" in a:
-        return "hisa"
-
-    if any(x in s for x in ("savings", "chequing", "checking")):
-        return "savings"
-    if "short-term" in a or "short term" in a:
-        return "savings"
+    # Direct Sub-Type lookup — covers all other clean values
+    group = _SUBTYPE_GROUP.get(s)
+    if group:
+        return group
 
     return "other"
 

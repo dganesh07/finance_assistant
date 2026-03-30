@@ -71,6 +71,7 @@ const GROUP_LABEL = {
   gic:        'GIC',
   hisa:       'HISA',
   savings:    'Savings',
+  long_term:  'Long-Term',
   other:      'Other',
 }
 
@@ -80,6 +81,7 @@ const GROUP_STYLE = {
   gic:        styles.groupGic,
   hisa:       styles.groupHisa,
   savings:    styles.groupSavings,
+  long_term:  styles.groupLongTerm,
   other:      styles.groupOther,
 }
 
@@ -115,10 +117,23 @@ function TypeLabel({ type }) {
 
 function DonutTooltip({ active, payload }) {
   if (!active || !payload?.length) return null
-  const { name, value, currency } = payload[0].payload
+  const { name, value, currency, breakdown } = payload[0].payload
   return (
     <div className={styles.tooltip}>
-      {name}: {fmtAmt(value, currency)}
+      <div className={styles.tooltipHeader}>
+        <span>{name}</span>
+        <span>{fmtAmt(value, currency)}</span>
+      </div>
+      {breakdown?.length > 0 && (
+        <div className={styles.tooltipBreakdown}>
+          {breakdown.map((b, i) => (
+            <div key={i} className={styles.tooltipRow}>
+              <span className={styles.tooltipLabel}>{b.label}</span>
+              <span className={styles.tooltipAmt}>{fmtAmt(b.value, b.currency)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -153,30 +168,36 @@ export default function Portfolio() {
   const updated   = data?._last_updated
 
   // ── Invested / Cash donut data ───────────────────────────────────────────────
-  // Invested = TFSA + GICs + CAD retirement (RRSP)
-  // Cash     = HISA + savings
-  // US Retirement = 401K (USD, kept separate since currency differs)
-  // Other    = everything else included in net worth
+  // CAD buckets:
+  //   Invested        = TFSA + GICs + CAD retirement (RRSP) + long-term (real estate, shares)
+  //   Cash / HISA     = HISA + savings (CAD)
+  //   Other CAD       = anything else CAD (catch-all)
+  // USD buckets (kept separate — different currency):
+  //   US Retirement   = 401K
+  //   Other USD       = any remaining USD non-retirement (e.g. BECU while transitioning)
 
-  const investedCAD = accounts
-    .filter(a => a.currency === 'CAD' && ['tfsa', 'retirement', 'gic'].includes(a.group))
-    .reduce((s, a) => s + a.balance, 0)
+  // Helper: build a per-account breakdown list for the tooltip
+  const mkBreakdown = (accts) =>
+    accts.map(a => ({ label: a.name, value: a.balance, currency: a.currency }))
 
-  const cashCAD = accounts
-    .filter(a => a.currency === 'CAD' && ['hisa', 'savings'].includes(a.group))
-    .reduce((s, a) => s + a.balance, 0)
+  const investedAccts  = accounts.filter(a => a.currency === 'CAD' && ['tfsa', 'retirement', 'gic', 'long_term'].includes(a.group))
+  const cashAccts      = accounts.filter(a => a.currency === 'CAD' && ['hisa', 'savings'].includes(a.group))
+  const otherCADAccts  = accounts.filter(a => a.currency === 'CAD' && a.group === 'other')
+  const retirementAccts = accounts.filter(a => a.currency === 'USD' && a.group === 'retirement')
+  const otherUSDAccts  = accounts.filter(a => a.currency === 'USD' && a.group !== 'retirement')
 
-  const otherCAD = accounts
-    .filter(a => a.currency === 'CAD' && a.group === 'other')
-    .reduce((s, a) => s + a.balance, 0)
-
-  const retirementUSD = summary.retirement_usd ?? 0
+  const investedCAD   = investedAccts.reduce((s, a)  => s + a.balance, 0)
+  const cashCAD       = cashAccts.reduce((s, a)       => s + a.balance, 0)
+  const otherCAD      = otherCADAccts.reduce((s, a)   => s + a.balance, 0)
+  const retirementUSD = retirementAccts.reduce((s, a) => s + a.balance, 0)
+  const otherUSD      = otherUSDAccts.reduce((s, a)   => s + a.balance, 0)
 
   const donutData = [
-    { name: 'Invested / GICs', value: investedCAD,   currency: 'CAD', color: '#c084fc' },
-    { name: 'Cash / HISA',     value: cashCAD,        currency: 'CAD', color: '#60a5fa' },
-    { name: 'US Retirement',   value: retirementUSD,  currency: 'USD', color: '#f59e0b' },
-    { name: 'Other',           value: otherCAD,        currency: 'CAD', color: '#475569' },
+    { name: 'Invested',      value: investedCAD,   currency: 'CAD', color: '#c084fc', breakdown: mkBreakdown(investedAccts) },
+    { name: 'Cash / HISA',   value: cashCAD,        currency: 'CAD', color: '#60a5fa', breakdown: mkBreakdown(cashAccts) },
+    { name: 'US Retirement', value: retirementUSD,  currency: 'USD', color: '#f59e0b', breakdown: mkBreakdown(retirementAccts) },
+    { name: 'Other USD',     value: otherUSD,        currency: 'USD', color: '#34d399', breakdown: mkBreakdown(otherUSDAccts) },
+    { name: 'Other CAD',     value: otherCAD,        currency: 'CAD', color: '#475569', breakdown: mkBreakdown(otherCADAccts) },
   ].filter(d => d.value > 0)
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -327,46 +348,36 @@ export default function Portfolio() {
       </div>
 
       {/* ── Investment Holdings ─────────────────────────────────────────────── */}
-      <div className={styles.holdingsRow}>
-
-        {/* TFSA */}
-        <div className={styles.holdingCard}>
-          <div className={styles.holdingTitle}>TFSA Holdings</div>
-          <div className={styles.holdingSubtitle}>
-            registered account · CAD · future: live price data
-          </div>
-          {(holdings['TFSA'] ?? []).length === 0
-            ? <p className={styles.empty}>No TFSA holdings recorded.</p>
-            : (holdings['TFSA'] ?? []).map((h, i) => (
-              <div key={i} className={styles.holdingRow}>
-                <span className={styles.holdingTicker}>{h.ticker}</span>
-                <span className={styles.holdingUnits}>{fmtUnits(h.total_units)} units</span>
-                <span className={styles.holdingCost}>{fmtAmt(h.cost_basis, h.currency)}</span>
-                <span className={styles.holdingCurr}><CurrBadge currency={h.currency} /></span>
+      {/* Rendered dynamically from Investment_Transactions tab aggregates.     */}
+      {/* One card per group (TFSA, 401K, etc.) — no hardcoded group names.    */}
+      {/* Cost basis = sum of Buy totals. Live prices are MVP+, not yet built.  */}
+      {Object.keys(holdings).length === 0 ? null : (
+        <div className={styles.holdingsRow}>
+          {Object.entries(holdings).map(([group, items]) => {
+            // Infer the display currency from the first holding in this group
+            const currency = items[0]?.currency ?? 'CAD'
+            return (
+              <div key={group} className={styles.holdingCard}>
+                <div className={styles.holdingTitle}>{group} Holdings</div>
+                <div className={styles.holdingSubtitle}>
+                  cost basis from transactions · {currency} · price data not yet connected
+                </div>
+                {items.length === 0
+                  ? <p className={styles.empty}>No holdings recorded.</p>
+                  : items.map((h, i) => (
+                    <div key={i} className={styles.holdingRow}>
+                      <span className={styles.holdingTicker}>{h.ticker}</span>
+                      <span className={styles.holdingUnits}>{fmtUnits(h.total_units)} units</span>
+                      <span className={styles.holdingCost}>{fmtAmt(h.cost_basis, h.currency)}</span>
+                      <span className={styles.holdingCurr}><CurrBadge currency={h.currency} /></span>
+                    </div>
+                  ))
+                }
               </div>
-            ))
-          }
+            )
+          })}
         </div>
-
-        {/* US Retirement — 401K */}
-        <div className={styles.holdingCard}>
-          <div className={styles.holdingTitle}>US Retirement — 401K</div>
-          <div className={styles.holdingSubtitle}>
-            fidelity · USD · employer match + roth + employee deferral
-          </div>
-          {(holdings['401K'] ?? []).length === 0
-            ? <p className={styles.empty}>No 401K holdings recorded.</p>
-            : (holdings['401K'] ?? []).map((h, i) => (
-              <div key={i} className={styles.holdingRow}>
-                <span className={styles.holdingTicker}>{h.ticker}</span>
-                <span className={styles.holdingUnits}>{fmtUnits(h.total_units)} units</span>
-                <span className={styles.holdingCost}>{fmtAmt(h.cost_basis, h.currency)}</span>
-                <span className={styles.holdingCurr}><CurrBadge currency={h.currency} /></span>
-              </div>
-            ))
-          }
-        </div>
-      </div>
+      )}
 
       {/* ── Investment Transactions log ──────────────────────────────────────── */}
       <div className={styles.panel}>

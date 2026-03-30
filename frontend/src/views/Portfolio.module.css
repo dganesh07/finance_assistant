@@ -124,6 +124,7 @@
 .groupGic        { background: rgba(251,191,36,0.15);  color: #fbbf24; }
 .groupHisa       { background: rgba(74,222,128,0.15);  color: var(--green); }
 .groupSavings    { background: rgba(96,165,250,0.15);  color: var(--blue); }
+.groupLongTerm   { background: rgba(52,211,153,0.15);  color: #34d399; }
 .groupOther      { background: rgba(100,116,139,0.15); color: var(--muted); }
 
 /* ── Invested vs Cash donut ──────────────────────────────────────────────────── */
@@ -236,10 +237,43 @@
   background: #1a1a1a;
   border: 1px solid #333;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text);
+  min-width: 180px;
+}
+.tooltipHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.tooltipBreakdown {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tooltipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tooltipLabel {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 130px;
+}
+.tooltipAmt {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────────── */

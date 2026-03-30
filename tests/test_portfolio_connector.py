@@ -86,6 +86,11 @@ def _inv_row(date, account, ticker, txn_type, units, price, total,
 # ── _classify_account ──────────────────────────────────────────────────────────
 
 class TestClassifyAccount(unittest.TestCase):
+    # Classification now driven by Sub-Type column (dict lookup).
+    # TFSA is the only special case — caught by name/asset_class before the dict.
+    # All other accounts must have a clean Sub-Type value in the sheet.
+
+    # ── TFSA (special case — checked before dict) ──────────────────────────────
 
     def test_tfsa_by_name(self):
         self.assertEqual(_classify_account("TFSA", "", "", "CAD"), "tfsa")
@@ -93,23 +98,46 @@ class TestClassifyAccount(unittest.TestCase):
     def test_tfsa_by_asset_class(self):
         self.assertEqual(_classify_account("Questrade", "Long Term Reg (TFSA)", "", "CAD"), "tfsa")
 
-    def test_retirement_401k(self):
-        self.assertEqual(_classify_account("Fidelity-401K-USA", "", "", "USD"), "retirement")
+    def test_tfsa_long_term_reg_asset_class(self):
+        # "long term reg" anywhere in asset_class string → tfsa
+        self.assertEqual(_classify_account("Questrade", "Long Term Reg (TFSA)", "ETF/Stocks", "CAD"), "tfsa")
 
-    def test_retirement_rrsp(self):
-        self.assertEqual(_classify_account("RRSP", "", "", "CAD"), "retirement")
+    # ── Retirement — must have Sub-Type "401K" or "RRSP" in the sheet ─────────
 
-    def test_retirement_roth(self):
-        self.assertEqual(_classify_account("Roth IRA", "", "", "USD"), "retirement")
+    def test_retirement_401k_via_subtype(self):
+        self.assertEqual(_classify_account("Fidelity-401K-USA", "Retirement (401K + RRSP)", "401K", "USD"), "retirement")
 
-    def test_retirement_by_asset_class(self):
-        self.assertEqual(_classify_account("Fidelity", "Retirement (401K + RRSP)", "", "USD"), "retirement")
+    def test_retirement_rrsp_via_subtype(self):
+        self.assertEqual(_classify_account("RRSP Account", "Retirement", "RRSP", "CAD"), "retirement")
+
+    def test_retirement_subtype_case_insensitive(self):
+        # Classifier lowercases before lookup
+        self.assertEqual(_classify_account("My 401k", "", "401k", "USD"), "retirement")
+
+    # ── Accounts that relied on name/asset-class now fall to "other" without a
+    #    clean Sub-Type — this documents the expected behaviour after sheet cleanup ─
+
+    def test_missing_subtype_falls_to_other(self):
+        # No Sub-Type in sheet → falls to "other" (user must set Sub-Type)
+        self.assertEqual(_classify_account("Roth IRA", "", "", "USD"), "other")
+
+    def test_asset_class_only_retirement_falls_to_other(self):
+        # Asset-class-based detection was removed — Sub-Type is required
+        self.assertEqual(_classify_account("Fidelity", "Retirement (401K + RRSP)", "", "USD"), "other")
+
+    # ── HISA ──────────────────────────────────────────────────────────────────
 
     def test_hisa_by_subtype(self):
         self.assertEqual(_classify_account("HYSA Canada", "Emergency Fund (Cash)", "HISA", "CAD"), "hisa")
 
-    def test_hisa_by_name(self):
-        self.assertEqual(_classify_account("EQ HISA", "", "", "CAD"), "hisa")
+    def test_hisa_subtype_case_insensitive(self):
+        self.assertEqual(_classify_account("EQ Bank", "", "hisa", "CAD"), "hisa")
+
+    def test_hisa_name_only_falls_to_other(self):
+        # Name-based HISA detection was removed — Sub-Type is required
+        self.assertEqual(_classify_account("EQ HISA", "", "", "CAD"), "other")
+
+    # ── Savings / Chequing ────────────────────────────────────────────────────
 
     def test_savings_by_subtype(self):
         self.assertEqual(_classify_account("TD Saving", "Short-Term Savings", "Savings", "CAD"), "savings")
@@ -117,21 +145,32 @@ class TestClassifyAccount(unittest.TestCase):
     def test_savings_chequing(self):
         self.assertEqual(_classify_account("TD Chequing", "", "Chequing", "CAD"), "savings")
 
+    # ── GIC ───────────────────────────────────────────────────────────────────
+
     def test_gic_by_subtype(self):
         self.assertEqual(_classify_account("Oaken 1yr GIC", "Fixed Income", "GIC", "CAD"), "gic")
 
     def test_gic_by_subtype_term_deposit(self):
         self.assertEqual(_classify_account("TD Term Deposit", "Fixed Income", "Term Deposit", "CAD"), "gic")
 
-    def test_gic_by_asset_class_fixed_income(self):
-        self.assertEqual(_classify_account("Some GIC", "Fixed Income", "", "CAD"), "gic")
+    def test_gic_asset_class_only_falls_to_other(self):
+        # Asset-class-based GIC detection was removed — Sub-Type is required
+        self.assertEqual(_classify_account("Some GIC", "Fixed Income", "", "CAD"), "other")
 
     def test_tfsa_gic_is_tfsa_not_gic(self):
-        # TFSA check runs before GIC — a TFSA GIC should stay in the tfsa group
+        # TFSA check runs before dict — a TFSA GIC stays in the tfsa group
         self.assertEqual(_classify_account("TFSA GIC", "Long Term Reg (TFSA)", "GIC", "CAD"), "tfsa")
 
-    def test_other_fallback(self):
+    # ── Other ─────────────────────────────────────────────────────────────────
+
+    def test_other_fallback_unknown_subtype(self):
         self.assertEqual(_classify_account("India Land investment", "Other", "", "USD"), "other")
+
+    def test_real_estate_subtype(self):
+        self.assertEqual(_classify_account("India Land investment", "Other", "Real Estate", "CAD"), "long_term")
+
+    def test_shares_subtype(self):
+        self.assertEqual(_classify_account("Company RSUs", "Equity", "Shares", "USD"), "long_term")
 
 
 # ── _infer_currency ────────────────────────────────────────────────────────────
