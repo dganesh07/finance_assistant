@@ -20,9 +20,10 @@ SCHEMA_FILE      = BASE_DIR / "db" / "schema.sql"
 # GOOGLE_SHEET_ID is set in config.local.py (git-ignored) — never commit your sheet ID.
 # Copy config.local.example.py → config.local.py and fill in your sheet ID.
 # Leave GOOGLE_SHEET_ID as "" here; it will be overridden by config.local.py if present.
-GOOGLE_SHEET_ID     = ""
-GOOGLE_CREDS_FILE   = BASE_DIR / "google_credentials.json"
-GOOGLE_ACCOUNTS_TAB = "Accounts"   # sheet tab name — change if your tab is named differently
+GOOGLE_SHEET_ID        = ""
+GOOGLE_CREDS_FILE      = BASE_DIR / "google_credentials.json"
+GOOGLE_ACCOUNTS_TAB    = "Accounts"              # tab used by the expense context builder
+GOOGLE_INVESTMENT_TAB  = "Investment_Transactions"  # tab for the portfolio dashboard
 
 # Load local overrides (git-ignored) — this is where your personal sheet ID lives
 try:

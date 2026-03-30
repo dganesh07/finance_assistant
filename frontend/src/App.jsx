@@ -4,6 +4,7 @@ import Dashboard from './views/Dashboard.jsx'
 import Monthly from './views/Monthly.jsx'
 import Review from './views/Review.jsx'
 import Transactions from './views/Transactions.jsx'
+import Portfolio from './views/Portfolio.jsx'
 import { api } from './api.js'
 import styles from './App.module.css'
 
@@ -27,6 +28,7 @@ export default function App() {
         {view === 'monthly'       && <Monthly />}
         {view === 'review'        && <Review onConfirm={refreshReviewCount} />}
         {view === 'transactions'  && <Transactions />}
+        {view === 'portfolio'     && <Portfolio />}
       </main>
     </div>
   )

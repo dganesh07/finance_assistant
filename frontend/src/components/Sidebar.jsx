@@ -5,6 +5,7 @@ const NAV = [
   { id: 'monthly',      label: 'Monthly',      icon: '◫' },
   { id: 'review',       label: 'Review',       icon: '◈' },
   { id: 'transactions', label: 'Transactions', icon: '≡' },
+  { id: 'portfolio',    label: 'Portfolio',    icon: '◎' },
 ]
 
 export default function Sidebar({ view, setView, reviewCount }) {

@@ -80,6 +80,9 @@ export const api = {
   // AI insights (POST triggers generation)
   postInsights: (month) => post(`/api/insights${month ? `?month=${month}` : ''}`, {}),
 
+  // Portfolio — Google Sheets read-only (accounts + investment holdings)
+  getPortfolio: () => get('/api/portfolio'),
+
   // Correction rules
   getCorrections:    () => get('/api/corrections'),
   addCorrection:     (key, category, subcategory = null) =>

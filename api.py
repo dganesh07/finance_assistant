@@ -4,7 +4,7 @@ api.py — FastAPI backend for the Finance Agent dashboard.
 Run:
   uvicorn api:app --reload --port 8000
 
-Endpoints (25 total):
+Endpoints (26 total):
   GET    /api/categories                    — full category list from config
   GET    /api/subcategories                 — subcategory map { category: [subcategory, ...] }
   GET    /api/bills                         — bills from bills.local.json
@@ -30,6 +30,7 @@ Endpoints (25 total):
   GET    /api/corrections                   — view all rules in corrections.json
   POST   /api/corrections                   — add/update a correction rule
   DELETE /api/corrections/{key}             — remove a correction rule
+  GET    /api/portfolio                     — account balances + investment holdings from Google Sheets
 
 Note: Background categorizer jobs are tracked in _jobs (in-memory dict). Job state is lost
 if the server restarts mid-run — the client should handle a missing job_id gracefully.
@@ -47,11 +48,14 @@ from pydantic import BaseModel
 
 from config import (
     BILLS_FILE, BURN_RATE_START, CATEGORIES, CORRECTIONS_FILE, DB_PATH,
-    FIXED_CATEGORIES, REPORT_BACKEND, REPORT_MODEL, STATEMENTS_DIR, SUBCATEGORIES,
+    FIXED_CATEGORIES, GOOGLE_ACCOUNTS_TAB, GOOGLE_CREDS_FILE,
+    GOOGLE_INVESTMENT_TAB, GOOGLE_SHEET_ID,
+    REPORT_BACKEND, REPORT_MODEL, STATEMENTS_DIR, SUBCATEGORIES,
 )
 from src.categorizer import categorize_transactions
 from src.context_builder import build_context
 from src.parser import parse_new_statements
+from src.portfolio_connector import load_portfolio
 
 app = FastAPI(title="Finance Agent API")
 
@@ -1188,3 +1192,47 @@ def delete_correction(key: str) -> dict:
     del raw[upper]
     _write_corrections_file(raw)
     return {"deleted": upper}
+
+
+# ── Portfolio (Google Sheets — read-only, no DB) ───────────────────────────────
+
+@app.get("/api/portfolio")
+def get_portfolio() -> dict:
+    """
+    Read account balances and investment transactions from Google Sheets.
+
+    Returns a combined portfolio snapshot:
+      accounts               — all included accounts with currency, balance, group
+      summary                — aggregated totals (CAD total, USD total, TFSA, 401K)
+      investment_transactions — transaction history from Investment_Transactions tab
+      holdings               — TFSA / 401K ticker aggregates (units, cost basis)
+
+    No DB involved — all data comes live from Google Sheets.
+    Returns an empty/error dict if Google Sheets credentials are not configured.
+    """
+    if not GOOGLE_SHEET_ID:
+        return {
+            "error":    "Google Sheets not configured. Set GOOGLE_SHEET_ID in config_local.py.",
+            "accounts": [],
+            "summary":  {},
+            "investment_transactions": [],
+            "holdings": {},
+        }
+
+    data = load_portfolio(
+        sheet_id=GOOGLE_SHEET_ID,
+        creds_file=GOOGLE_CREDS_FILE,
+        accounts_tab=GOOGLE_ACCOUNTS_TAB,
+        investments_tab=GOOGLE_INVESTMENT_TAB,
+    )
+
+    if not data:
+        return {
+            "error":    "Failed to load portfolio from Google Sheets. Check logs.",
+            "accounts": [],
+            "summary":  {},
+            "investment_transactions": [],
+            "holdings": {},
+        }
+
+    return data
