@@ -1,9 +1,7 @@
 """
 src/context_builder.py — Assembles DB data + profile into AI-ready spending context.
 
-This is the SPENDING AGENT context — focused purely on TD Bank transactions.
-External accounts (EQ Bank, TFSA, investments) belong to the portfolio agent
-(not yet built) and are handled by sheets_connector.py when that is wired up.
+Scope: TD Bank spending only. No external account data (that lives in the portfolio flow).
 
 Data sources:
   1. SQLite (transactions, account_balances)
@@ -49,13 +47,6 @@ def _pct_change(old: float, new: float) -> str:
     delta = ((new - old) / old) * 100
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.0f}%"
-
-
-# ── PORTFOLIO AGENT (not yet built) ───────────────────────────────────────────
-# When the portfolio agent is built, wire in sheets_connector.py here to load
-# live account balances (EQ Bank, TFSA, other accounts) from Google Sheets.
-# See src/sheets_connector.py and config.py (GOOGLE_SHEET_ID).
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _next_month(year: int, month: int) -> str:
@@ -403,184 +394,6 @@ def _section_bills() -> str:
     return "\n".join(lines)
 
 
-# ── PORTFOLIO AGENT SECTIONS (not called from build_context — kept for later) ──
-
-def _section_external_accounts(snap: dict) -> str:  # noqa: C901
-    source = snap.get("_source", "json")
-    source_label = "Google Sheets (live)" if source == "google_sheets" else "unknown source"
-    lines = [f"EXTERNAL ACCOUNTS ({source_label})", "─" * 60]
-
-    if not snap:
-        lines.append("  [No external account data — configure Google Sheets (GOOGLE_SHEET_ID in config_local.py)]")
-        return "\n".join(lines)
-
-    warnings = []
-    today = date.today()
-
-    last_updated = snap.get("_last_updated", "unknown")
-    lines.append(f"  Last updated: {last_updated}")
-
-    # ── EQ Bank HISA ──────────────────────────────────────────────────────────
-    eq = snap.get("eq_bank", {})
-    eq_bal = eq.get("savings_balance", 0)
-    if eq_bal and eq_bal > 0:
-        base_rate  = eq.get("base_rate_pct") or eq.get("hisa_rate_pct", 0)
-        promo_rate = eq.get("promo_rate_pct", 0)
-        promo_end  = eq.get("promo_end_date", "")
-        active_rate = promo_rate if promo_rate > 0 else base_rate
-        annual_interest = eq_bal * active_rate / 100
-
-        lines.append(f"\n  EQ Bank HISA")
-        lines.append(f"    Balance:         {_fmt(eq_bal)}")
-
-        if promo_rate > 0:
-            lines.append(f"    Current rate:    {promo_rate}% (promo) — projected annual interest: {_fmt(annual_interest)}")
-            lines.append(f"    Base rate:       {base_rate}% (if promo conditions not met)")
-            if promo_end:
-                lines.append(f"    Promo end:       {promo_end} — rate drops to {base_rate}% after income stops")
-                # Flag if promo end is within 90 days
-                try:
-                    end_date = date.fromisoformat(promo_end)
-                    days_left = (end_date - today).days
-                    if 0 < days_left <= 90:
-                        warnings.append(f"  ⚠  EQ Bank promo rate expires in {days_left} days ({promo_end}) — plan rate drop from {promo_rate}% → {base_rate}%")
-                    elif days_left <= 0:
-                        warnings.append(f"  ⚠  EQ Bank promo rate may have expired ({promo_end}) — verify current rate")
-                except ValueError:
-                    pass
-        else:
-            lines.append(f"    Rate:            {active_rate}% — projected annual interest: {_fmt(annual_interest)}")
-    else:
-        warnings.append("  ⚠  EQ Bank balance is 0 or missing")
-
-    # ── GICs ──────────────────────────────────────────────────────────────────
-    gics = snap.get("gics", [])
-    real_gics = [g for g in gics if g.get("principal", 0) > 0]
-    if real_gics:
-        lines.append(f"\n  GICs")
-        gic_total = 0
-        for g in real_gics:
-            principal  = g.get("principal", 0)
-            rate       = g.get("rate_pct", 0)
-            annual_int = principal * rate / 100
-            gic_total += principal
-            tfsa_tag   = " [TFSA]" if g.get("is_tfsa") else ""
-            mat        = g.get("maturity_date", "unknown")
-            if mat in ("YYYY-MM-DD", "", None):
-                warnings.append(f"  ⚠  GIC '{g.get('nickname','unnamed')}' has no maturity date")
-            lines.append(f"    {g.get('nickname','GIC')}{tfsa_tag}")
-            lines.append(f"      Institution:   {g.get('institution','')}")
-            lines.append(f"      Principal:     {_fmt(principal)}   @{rate}%   → {_fmt(annual_int)}/year interest")
-            lines.append(f"      Maturity:      {mat}")
-            if g.get("notes"):
-                lines.append(f"      Notes:         {g['notes']}")
-        lines.append(f"    Total in GICs:   {_fmt(gic_total)}")
-    else:
-        gic_total = 0
-
-    # ── TFSA ──────────────────────────────────────────────────────────────────
-    tfsa = snap.get("tfsa", {})
-    tfsa_bal = tfsa.get("total_balance", 0)
-    if tfsa_bal and tfsa_bal > 0:
-        invested  = tfsa.get("invested_balance", 0)
-        cash_held = tfsa.get("cash_balance", 0)
-        room      = tfsa.get("contribution_room_remaining", 0)
-
-        lines.append(f"\n  TFSA")
-        lines.append(f"    Total balance:   {_fmt(tfsa_bal)}")
-
-        # Show invested vs cash split if available
-        if invested > 0 or cash_held > 0:
-            lines.append(f"    Invested (ETF):  {_fmt(invested)}")
-            lines.append(f"    Cash (uninvested): {_fmt(cash_held)}")
-            if cash_held > 0:
-                warnings.append(
-                    f"  ℹ  TFSA has {_fmt(cash_held)} sitting in cash — consider investing "
-                    f"(only relevant outside of spending planning)"
-                )
-
-        if room > 0:
-            lines.append(f"    Room remaining:  {_fmt(room)}")
-
-    # ── Other accounts — split CAD vs USD ─────────────────────────────────────
-    other_all  = [a for a in snap.get("other_accounts", []) if a.get("balance", 0) > 0]
-    other_cad  = [a for a in other_all if a.get("currency", "CAD") == "CAD"]
-    other_usd  = [a for a in other_all if a.get("currency", "CAD") != "CAD"]
-
-    if other_cad:
-        lines.append(f"\n  Other CAD Accounts")
-        for acct in other_cad:
-            lines.append(f"    {acct.get('nickname', acct.get('institution', 'Account'))}"
-                         f"  ({acct.get('institution', '')})")
-            lines.append(f"      Balance: {_fmt(acct['balance'])}")
-
-    if other_usd:
-        usd_total = sum(a["balance"] for a in other_usd)
-        lines.append(f"\n  USD / Foreign Accounts (excluded from CAD net worth)")
-        for acct in other_usd:
-            ccy = acct.get("currency", "USD")
-            lines.append(f"    {acct.get('nickname', acct.get('institution', 'Account'))}"
-                         f"  — {_fmt(acct['balance'])} {ccy}")
-
-    # ── Upcoming income ───────────────────────────────────────────────────────
-    income_sources = snap.get("upcoming_income", [])
-    active_income = [s for s in income_sources if s.get("approximate_monthly_net_cad", 0) > 0]
-    if active_income:
-        lines.append(f"\n  Income context")
-        for src in active_income:
-            amt   = src.get("approximate_monthly_net_cad", 0)
-            until = src.get("expected_until", "unknown")
-            lines.append(f"    {src.get('source','')}")
-            lines.append(f"      ~{_fmt(amt)}/month net   until {until}")
-            if src.get("notes"):
-                lines.append(f"      {src['notes']}")
-
-    # ── Net worth summary (CAD only) ──────────────────────────────────────────
-    other_total = sum(a.get("balance", 0) for a in other_cad)
-    if eq_bal or gic_total or tfsa_bal or other_total:
-        approx_net = eq_bal + gic_total + tfsa_bal + other_total
-        lines.append(f"\n  Approximate net worth (excl. TD Chequing, excl. USD accounts):")
-        if eq_bal:
-            lines.append(f"    EQ HISA:         {_fmt(eq_bal)}")
-        if gic_total:
-            lines.append(f"    GICs:            {_fmt(gic_total)}")
-        if tfsa_bal:
-            lines.append(f"    TFSA:            {_fmt(tfsa_bal)}")
-        if other_total:
-            lines.append(f"    Other (CAD):     {_fmt(other_total)}")
-        lines.append(f"    Subtotal:        {_fmt(approx_net)}  (add TD Chequing balance for full picture)")
-
-    if warnings:
-        lines.append(f"\n  NOTES & WARNINGS:")
-        lines.extend(warnings)
-
-    return "\n".join(lines)
-
-
-def _section_upcoming_flags(snap: dict) -> str:  # portfolio agent
-    lines = ["UPCOMING FLAGS", "─" * 60]
-    today = date.today()
-    found = False
-
-    for g in snap.get("gics", []):
-        mat = g.get("maturity_date")
-        if mat and mat not in ("YYYY-MM-DD", "", None):
-            try:
-                mat_date   = date.fromisoformat(mat)
-                days_to_mat = (mat_date - today).days
-                if 0 < days_to_mat < 365:
-                    lines.append(f"  ℹ  GIC maturity:    {g.get('nickname','GIC')} ({g.get('institution','')}) — {mat}  ({days_to_mat} days)")
-                    lines.append(f"     Principal {_fmt(g.get('principal', 0))} + interest to redeploy.")
-                    found = True
-            except ValueError:
-                pass
-
-    if not found:
-        lines.append("  (none in the next 12 months)")
-
-    return "\n".join(lines)
-
-
 def _section_top_transactions(conn: sqlite3.Connection) -> str:
     rows = conn.execute(f"""
         SELECT date, description, amount, category, account
@@ -635,9 +448,6 @@ def build_context() -> str:
 
     Covers: key framing, monthly spend breakdown, burn rate, fixed obligations,
     top transactions, and any uncategorised items needing review.
-
-    External accounts (EQ Bank, TFSA, investments) are intentionally excluded —
-    they belong to the portfolio agent (not yet built). See sheets_connector.py.
 
     Returns a plain text block ready to inject into any LLM prompt.
     """

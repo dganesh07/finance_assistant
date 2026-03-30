@@ -1,0 +1,246 @@
+/* ── Layout ──────────────────────────────────────────────────────────────────── */
+.page    { display: flex; flex-direction: column; gap: 16px; }
+.loading { color: var(--muted); font-family: var(--font-mono); padding: 40px 0; }
+.error   { color: var(--red);  font-family: var(--font-mono); font-size: 12px; padding: 12px 0; }
+
+/* ── Header ──────────────────────────────────────────────────────────────────── */
+.header   { display: flex; align-items: flex-start; justify-content: space-between; }
+.title    { font-family: var(--font-mono); font-size: 12px; color: var(--green); letter-spacing: 3px; text-transform: uppercase; }
+.subtitle { color: var(--muted); font-size: 11px; font-family: var(--font-mono); margin-top: 2px; }
+.refreshBtn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.refreshBtn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+.refreshBtn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Summary stat cards ──────────────────────────────────────────────────────── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+.cardLabel { font-size: 10px; font-family: var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.cardValue { font-size: 22px; font-family: var(--font-mono); font-weight: 600; }
+.cardSub   { font-size: 10px; color: var(--muted); margin-top: 3px; font-family: var(--font-mono); }
+
+/* ── Generic panel ───────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.panelTitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.empty { color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
+
+/* ── Two-column layout (accounts + donut) ────────────────────────────────────── */
+.accountsRow {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 12px;
+  align-items: start;
+}
+
+/* ── Account table ───────────────────────────────────────────────────────────── */
+.accountTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.accountTable th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 8px 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.accountTable td {
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+}
+.accountTable tr:last-child td { border-bottom: none; }
+.accountTable tr:hover td { background: rgba(255,255,255,0.02); }
+
+.acctName { color: var(--text); font-size: 12px; }
+.acctInst { color: var(--muted); font-size: 11px; }
+.acctBal  { text-align: right; font-size: 12px; font-weight: 600; color: var(--text); }
+
+/* ── Currency badge ──────────────────────────────────────────────────────────── */
+.currBadge {
+  display: inline-block;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.currCAD { background: rgba(96,165,250,0.15); color: var(--blue); }
+.currUSD { background: rgba(74,222,128,0.15); color: var(--green); }
+
+/* ── Group badge ─────────────────────────────────────────────────────────────── */
+.groupBadge {
+  display: inline-block;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.groupTfsa       { background: rgba(192,132,252,0.15); color: var(--purple); }
+.groupRetirement { background: rgba(245,158,11,0.15);  color: var(--amber); }
+.groupHisa       { background: rgba(74,222,128,0.15);  color: var(--green); }
+.groupSavings    { background: rgba(96,165,250,0.15);  color: var(--blue); }
+.groupOther      { background: rgba(100,116,139,0.15); color: var(--muted); }
+
+/* ── Invested vs Cash donut ──────────────────────────────────────────────────── */
+.donutWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding-top: 4px;
+}
+.donutLegend    { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.donutLegendRow { display: flex; align-items: center; gap: 8px; }
+.donutDot       { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.donutLegendLabel { font-family: var(--font-mono); font-size: 11px; color: var(--muted); flex: 1; }
+.donutLegendAmt   { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.donutPct {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+/* ── Holdings section ────────────────────────────────────────────────────────── */
+.holdingsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.holdingCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.holdingTitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.holdingSubtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--subtle);
+  margin-bottom: 14px;
+}
+
+.holdingRow {
+  display: grid;
+  grid-template-columns: 80px 1fr 90px 70px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.holdingRow:last-child { border-bottom: none; }
+
+.holdingTicker { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text); }
+.holdingUnits  { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.holdingCost   { font-family: var(--font-mono); font-size: 12px; color: var(--text); text-align: right; }
+.holdingCurr   { text-align: right; }
+
+/* ── Transactions table ──────────────────────────────────────────────────────── */
+.txnTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.txnTable th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 8px 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.txnTable td {
+  padding: 7px 8px 7px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text);
+  vertical-align: middle;
+}
+.txnTable tr:last-child td { border-bottom: none; }
+.txnTable tr:hover td      { background: rgba(255,255,255,0.02); }
+
+.txnDate   { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.txnAcct   { color: var(--subtle); font-size: 11px; }
+.txnTicker { font-weight: 600; }
+.txnType   { }
+.txnUnits  { text-align: right; }
+.txnPrice  { text-align: right; color: var(--muted); }
+.txnTotal  { text-align: right; font-weight: 600; }
+.txnNotes  { color: var(--muted); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Type badge ──────────────────────────────────────────────────────────────── */
+.typeBuy      { color: var(--green); }
+.typeSell     { color: var(--red); }
+.typeDiv      { color: var(--amber); }
+.typeDeposit  { color: var(--blue); }
+.typeDefault  { color: var(--muted); }
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────────── */
+.tooltip {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .cards       { grid-template-columns: repeat(2, 1fr); }
+  .accountsRow { grid-template-columns: 1fr; }
+  .holdingsRow { grid-template-columns: 1fr; }
+}
