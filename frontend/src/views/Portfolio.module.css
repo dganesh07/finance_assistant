@@ -89,9 +89,12 @@
 .accountTable tr:last-child td { border-bottom: none; }
 .accountTable tr:hover td { background: rgba(255,255,255,0.02); }
 
-.acctName { color: var(--text); font-size: 12px; }
-.acctInst { color: var(--muted); font-size: 11px; }
-.acctBal  { text-align: right; font-size: 12px; font-weight: 600; color: var(--text); }
+.acctName      { color: var(--text); font-size: 12px; }
+.acctInst      { color: var(--muted); font-size: 11px; }
+.acctMaturity  { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.acctBal       { text-align: right; font-size: 12px; font-weight: 600; color: var(--text); }
+.acctProjected { text-align: right; font-size: 12px; font-weight: 600; color: var(--text); }
+.acctGain      { font-size: 10px; color: var(--green); font-family: var(--font-mono); margin-top: 1px; }
 
 /* ── Currency badge ──────────────────────────────────────────────────────────── */
 .currBadge {
@@ -118,6 +121,7 @@
 }
 .groupTfsa       { background: rgba(192,132,252,0.15); color: var(--purple); }
 .groupRetirement { background: rgba(245,158,11,0.15);  color: var(--amber); }
+.groupGic        { background: rgba(251,191,36,0.15);  color: #fbbf24; }
 .groupHisa       { background: rgba(74,222,128,0.15);  color: var(--green); }
 .groupSavings    { background: rgba(96,165,250,0.15);  color: var(--blue); }
 .groupOther      { background: rgba(100,116,139,0.15); color: var(--muted); }

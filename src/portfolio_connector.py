@@ -88,12 +88,17 @@ def _classify_account(name: str, asset_class: str, subtype: str, currency: str) 
     Groups:
       tfsa        — TFSA accounts (CAD registered)
       retirement  — 401k, RRSP, pension
+      gic         — GICs / term deposits (Sub-Type = "GIC" or "Term Deposit")
       hisa        — High-interest savings / emergency fund cash
       savings     — Short-term savings / chequing
       other       — Everything else included in net worth
+
+    Priority order matters: a TFSA GIC should classify as "tfsa" not "gic",
+    so TFSA check runs first.
     """
     n, a, s = name.lower(), asset_class.lower(), subtype.lower()
 
+    # TFSA first — a TFSA GIC is still a TFSA for grouping purposes
     if "tfsa" in n or "tfsa" in a or "tfsa" in s or "long term reg" in a:
         return "tfsa"
 
@@ -101,6 +106,12 @@ def _classify_account(name: str, asset_class: str, subtype: str, currency: str) 
         return "retirement"
     if "retirement" in a or "401k" in s or "rrsp" in s:
         return "retirement"
+
+    # GIC / term deposit — matched by Sub-Type column
+    if any(x in s for x in ("gic", "term deposit", "term")):
+        return "gic"
+    if any(x in a for x in ("gic", "fixed income", "term deposit")):
+        return "gic"
 
     if "hisa" in s or "hisa" in n or "emergency fund" in a:
         return "hisa"
@@ -111,6 +122,25 @@ def _classify_account(name: str, asset_class: str, subtype: str, currency: str) 
         return "savings"
 
     return "other"
+
+
+def _find_col_by_aliases(headers: list[str], aliases: list[str]) -> int | None:
+    """
+    Flexible 3-pass column lookup against an explicit alias list.
+    Used for portfolio-specific columns not in sheets_connector._COL_ALIASES
+    (e.g. Maturity Date — only relevant to the portfolio view).
+    """
+    clean = [h.strip().lower() for h in headers]
+    for alias in aliases:
+        a = alias.lower()
+        if a in clean:
+            return clean.index(a)
+    for alias in aliases:
+        a = alias.lower()
+        for i, h in enumerate(clean):
+            if h.startswith(a) or (h and a.startswith(h)):
+                return i
+    return None
 
 
 # ── Currency inference for investment transactions ────────────────────────────
@@ -146,20 +176,27 @@ def _load_accounts(ws_rows: list[list[str]]) -> tuple[list[dict], dict]:
     data_rows = ws_rows[1:]
     cols      = {key: _find_col(headers, key) for key, _ in _COL_ALIASES}
 
+    # Maturity Date is a portfolio-only column — not in sheets_connector._COL_ALIASES
+    maturity_col = _find_col_by_aliases(
+        headers,
+        ["Maturity Date", "Maturity", "Term End Date", "Term End", "Matures", "Expiry Date"],
+    )
+
     accounts: list[dict] = []
 
     # Contribution room is extracted from TFSA notes
     tfsa_contribution_room = 0.0
 
     for row in data_rows:
-        name        = _cell(row, cols["name"])
-        institution = _cell(row, cols["inst"])
-        currency    = _cell(row, cols["currency"]) or "CAD"
-        asset_class = _cell(row, cols["asset_class"])
-        subtype     = _cell(row, cols["subtype"])
-        balance     = _num(row,  cols["balance"])
-        base_rate   = _num(row,  cols["base_rate"])
-        notes       = _cell(row, cols["notes"])
+        name          = _cell(row, cols["name"])
+        institution   = _cell(row, cols["inst"])
+        currency      = _cell(row, cols["currency"]) or "CAD"
+        asset_class   = _cell(row, cols["asset_class"])
+        subtype       = _cell(row, cols["subtype"])
+        balance       = _num(row,  cols["balance"])
+        base_rate     = _num(row,  cols["base_rate"])
+        notes         = _cell(row, cols["notes"])
+        maturity_date = _cell(row, maturity_col)   # empty string if column absent or cell blank
 
         if not name:
             continue
@@ -175,15 +212,16 @@ def _load_accounts(ws_rows: list[list[str]]) -> tuple[list[dict], dict]:
                 tfsa_contribution_room = room
 
         accounts.append({
-            "name":        name,
-            "institution": institution,
-            "currency":    currency,
-            "asset_class": asset_class,
-            "subtype":     subtype,
-            "balance":     balance,
-            "base_rate":   base_rate,
-            "group":       group,       # tfsa | retirement | hisa | savings | other
-            "notes":       notes,
+            "name":          name,
+            "institution":   institution,
+            "currency":      currency,
+            "asset_class":   asset_class,
+            "subtype":       subtype,
+            "balance":       balance,
+            "base_rate":     base_rate,
+            "maturity_date": maturity_date,  # populated for GICs; empty for everything else
+            "group":         group,          # tfsa | retirement | gic | hisa | savings | other
+            "notes":         notes,
         })
 
     # ── Summary calculations ─────────────────────────────────────────────────
@@ -192,6 +230,7 @@ def _load_accounts(ws_rows: list[list[str]]) -> tuple[list[dict], dict]:
         "total_usd":          0.0,
         "tfsa_balance":       0.0,
         "retirement_usd":     0.0,
+        "gic_total_cad":      0.0,   # sum of all non-TFSA GICs in CAD
         "hisa_total_cad":     0.0,
         "savings_total_cad":  0.0,
         "invested_cad":       0.0,   # TFSA + CAD retirement (RRSP)
@@ -216,6 +255,9 @@ def _load_accounts(ws_rows: list[list[str]]) -> tuple[list[dict], dict]:
                 summary["retirement_usd"] += bal
             else:
                 summary["invested_cad"] += bal
+        elif grp == "gic":
+            if cur == "CAD":
+                summary["gic_total_cad"] += bal
         elif grp == "hisa":
             if cur == "CAD":
                 summary["hisa_total_cad"] += bal

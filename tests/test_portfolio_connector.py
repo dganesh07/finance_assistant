@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.portfolio_connector import (
     _classify_account,
+    _find_col_by_aliases,
     _find_inv_col,
     _infer_currency,
     _load_accounts,
@@ -115,6 +116,19 @@ class TestClassifyAccount(unittest.TestCase):
 
     def test_savings_chequing(self):
         self.assertEqual(_classify_account("TD Chequing", "", "Chequing", "CAD"), "savings")
+
+    def test_gic_by_subtype(self):
+        self.assertEqual(_classify_account("Oaken 1yr GIC", "Fixed Income", "GIC", "CAD"), "gic")
+
+    def test_gic_by_subtype_term_deposit(self):
+        self.assertEqual(_classify_account("TD Term Deposit", "Fixed Income", "Term Deposit", "CAD"), "gic")
+
+    def test_gic_by_asset_class_fixed_income(self):
+        self.assertEqual(_classify_account("Some GIC", "Fixed Income", "", "CAD"), "gic")
+
+    def test_tfsa_gic_is_tfsa_not_gic(self):
+        # TFSA check runs before GIC — a TFSA GIC should stay in the tfsa group
+        self.assertEqual(_classify_account("TFSA GIC", "Long Term Reg (TFSA)", "GIC", "CAD"), "tfsa")
 
     def test_other_fallback(self):
         self.assertEqual(_classify_account("India Land investment", "Other", "", "USD"), "other")
@@ -240,6 +254,80 @@ class TestLoadAccounts(unittest.TestCase):
                 ["", "TD", "CAD", "Other", "Savings", "1000", "", "Y", ""]]
         accounts, _ = _load_accounts(rows)
         self.assertEqual(len(accounts), 0)
+
+    def test_gic_account_classified_correctly(self):
+        rows = [_ACCT_HEADERS,
+                _acct_row("Oaken 1yr GIC", "Oaken", "CAD", "Fixed Income", "GIC",
+                          balance="10000", include="Y")]
+        accounts, summary = _load_accounts(rows)
+        self.assertEqual(accounts[0]["group"], "gic")
+        self.assertAlmostEqual(summary["gic_total_cad"], 10000.0)
+
+    def test_gic_maturity_date_read_when_column_present(self):
+        # Headers extended with Maturity Date column
+        headers_with_mat = _ACCT_HEADERS + ["Maturity Date"]
+        row = _acct_row("Oaken GIC", "Oaken", "CAD", "Fixed Income", "GIC",
+                        balance="10000", include="Y") + ["2026-09-15"]
+        rows = [headers_with_mat, row]
+        accounts, _ = _load_accounts(rows)
+        self.assertEqual(accounts[0]["maturity_date"], "2026-09-15")
+
+    def test_maturity_date_empty_when_column_absent(self):
+        # Standard headers have no Maturity Date column
+        rows = [_ACCT_HEADERS,
+                _acct_row("Oaken GIC", "Oaken", "CAD", "Fixed Income", "GIC",
+                          balance="10000", include="Y")]
+        accounts, _ = _load_accounts(rows)
+        self.assertEqual(accounts[0]["maturity_date"], "")
+
+    def test_maturity_date_empty_for_non_gic_accounts(self):
+        headers_with_mat = _ACCT_HEADERS + ["Maturity Date"]
+        row = _acct_row("HYSA Canada", "Oaken", "CAD", "Emergency Fund (Cash)", "HISA",
+                        balance="50000", include="Y") + [""]
+        rows = [headers_with_mat, row]
+        accounts, _ = _load_accounts(rows)
+        self.assertEqual(accounts[0]["maturity_date"], "")
+
+    def test_gic_not_counted_in_total_cad_separately(self):
+        """GIC balance is still included in total_cad."""
+        rows = [_ACCT_HEADERS,
+                _acct_row("Oaken GIC", "Oaken", "CAD", "Fixed Income", "GIC",
+                          balance="15000", include="Y")]
+        _, summary = _load_accounts(rows)
+        self.assertAlmostEqual(summary["total_cad"], 15000.0)
+        self.assertAlmostEqual(summary["gic_total_cad"], 15000.0)
+
+
+# ── _find_col_by_aliases ──────────────────────────────────────────────────────
+
+class TestFindColByAliases(unittest.TestCase):
+
+    def test_exact_match(self):
+        headers = ["Account Name", "Maturity Date", "Balance"]
+        idx = _find_col_by_aliases(headers, ["Maturity Date", "Maturity"])
+        self.assertEqual(idx, 1)
+
+    def test_startswith_match(self):
+        # "Maturity Date (YYYY-MM-DD)" starts with alias "Maturity Date"
+        headers = ["Account Name", "Maturity Date (YYYY-MM-DD)", "Balance"]
+        idx = _find_col_by_aliases(headers, ["Maturity Date"])
+        self.assertEqual(idx, 1)
+
+    def test_alias_order_priority(self):
+        # First alias in list wins when multiple would match
+        headers = ["Maturity", "Maturity Date"]
+        idx = _find_col_by_aliases(headers, ["Maturity Date", "Maturity"])
+        self.assertEqual(idx, 1)  # exact match on "Maturity Date" wins
+
+    def test_returns_none_when_no_match(self):
+        headers = ["Account Name", "Balance"]
+        idx = _find_col_by_aliases(headers, ["Maturity Date", "Maturity"])
+        self.assertIsNone(idx)
+
+    def test_case_insensitive(self):
+        headers = ["account name", "maturity date", "balance"]
+        idx = _find_col_by_aliases(headers, ["Maturity Date"])
+        self.assertEqual(idx, 1)
 
 
 # ── _load_investment_transactions ──────────────────────────────────────────────
