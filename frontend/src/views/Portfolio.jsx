@@ -16,6 +16,11 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { api } from '../api.js'
 import styles from './Portfolio.module.css'
 
+// ── FX rate ───────────────────────────────────────────────────────────────────
+// Used only for the combined net worth estimate. No live feed — update manually
+// when the rate shifts meaningfully (check xe.com or bank rate).
+const USD_CAD_RATE = 1.37
+
 // ── Projected value helper ────────────────────────────────────────────────────
 // GICs: use maturity_date to get the exact term → balance × (1 + rate/100 × years)
 // HISA / savings: always 1 year (no maturity date concept)
@@ -200,6 +205,21 @@ export default function Portfolio() {
     { name: 'Other CAD',     value: otherCAD,        currency: 'CAD', color: '#475569', breakdown: mkBreakdown(otherCADAccts) },
   ].filter(d => d.value > 0)
 
+  // ── Net worth estimate ───────────────────────────────────────────────────────
+  // Combines all included accounts. Exclude spending accounts from the sheet
+  // by setting "Include in Net Worth? = N" — they'll drop out of totals automatically.
+  const totalCAD    = summary.total_cad ?? 0
+  const totalUSD    = summary.total_usd ?? 0
+  const netWorthCAD = totalCAD + totalUSD * USD_CAD_RATE
+
+  // GIC projected gains (sum of all GICs with a future maturity)
+  const gicGain = accounts
+    .filter(a => a.group === 'gic')
+    .reduce((s, a) => {
+      const proj = calcProjected(a)
+      return s + (proj ? proj.gain : 0)
+    }, 0)
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
@@ -342,6 +362,22 @@ export default function Portfolio() {
                   <span className={styles.donutLegendAmt}>{fmtAmt(d.value, d.currency)}</span>
                 </div>
               ))}
+            </div>
+
+            {/* ── Net worth summary ─────────────────────────────────────── */}
+            <div className={styles.netWorthBlock}>
+              <div className={styles.netWorthDivider} />
+              <div className={styles.netWorthLabel}>Total Net Worth</div>
+              <div className={styles.netWorthValue}>{fmtCAD(netWorthCAD)}</div>
+              <div className={styles.netWorthSub}>
+                {fmtCAD(totalCAD)} CAD &nbsp;+&nbsp; {fmtUSD(totalUSD)} USD @ {USD_CAD_RATE}
+              </div>
+              {gicGain > 0 && (
+                <div className={styles.netWorthGicRow}>
+                  <span className={styles.netWorthGicLabel}>GIC interest locked in</span>
+                  <span className={styles.netWorthGain}>+{fmtCAD(gicGain)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

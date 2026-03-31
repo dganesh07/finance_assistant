@@ -21,6 +21,60 @@
 .refreshBtn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
 .refreshBtn:disabled { opacity: 0.4; cursor: default; }
 
+/* ── Net worth block (inside donut panel, below legend) ──────────────────────── */
+.netWorthBlock {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.netWorthDivider {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  margin-bottom: 10px;
+}
+.netWorthLabel {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.netWorthValue {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+}
+.netWorthSub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.netWorthGicRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.netWorthGicLabel {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.netWorthGain {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+}
+
 /* ── Summary stat cards ──────────────────────────────────────────────────────── */
 .cards {
   display: grid;
