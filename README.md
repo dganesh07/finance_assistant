@@ -1,6 +1,6 @@
 # Finance Assistant
 
-A local personal finance tool for TD Bank account holders. Drop bank statements into a folder, run the pipeline, review AI-assigned categories, and get a structured financial context block ready for an LLM report or chat session.
+A local personal finance tool for TD Bank account holders. Import bank statements, review AI-assigned categories, browse spending by month, and track your investment portfolio — all from a local web UI.
 
 No cloud sync, no third-party services beyond Google Sheets (optional). Everything runs on your machine.
 
@@ -303,3 +303,4 @@ The parser strips names from e-transfer and cheque descriptions before writing t
 Nothing in this project sends data to any external service except:
 - **Ollama** — runs locally, no data leaves your machine
 - **Google Sheets** — read-only access to a sheet you control, using a service account you create
+- **Claude API** — optional; only used if `ANTHROPIC_API_KEY` is set in `config_local.py` and you trigger AI insights

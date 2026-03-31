@@ -20,11 +20,14 @@ Run the transparent test:
 """
 
 import json
+import logging
 import re
 
 import ollama
 
 from config import BILLS_FILE, CATEGORIES, CORRECTIONS_FILE, OLLAMA_MODEL, PROFILE_FILE, SUBCATEGORIES
+
+logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 20  # transactions per LLM call
 
@@ -263,16 +266,13 @@ def categorize_transactions(transactions: list[dict]) -> list[dict]:
         batch_txns   = [t for _, t in batch_pairs]
         prompt       = build_prompt(batch_txns, profile)
 
-        # ── DEBUG: show what we're sending to Ollama ──────────────────────────
         batch_end = min(batch_start + BATCH_SIZE, len(needs_llm))
-        print(f"\n── Ollama batch {batch_start + 1}–{batch_end} of {len(needs_llm)} ──")
+        logger.debug("Ollama batch %d–%d of %d", batch_start + 1, batch_end, len(needs_llm))
         for i, t in enumerate(batch_txns, start=1):
             readable = _clean_for_llm(t["description"])
             changed  = readable != t["description"]
             suffix   = f"  [cleaned from: {t['description']}]" if changed else ""
-            print(f"  {i:2}. {readable}  ${t['amount']:.2f}{suffix}")
-        print()
-        # ──────────────────────────────────────────────────────────────────────
+            logger.debug("  %2d. %s  $%.2f%s", i, readable, t["amount"], suffix)
 
         try:
             response = ollama.chat(
@@ -303,12 +303,12 @@ def categorize_transactions(transactions: list[dict]) -> list[dict]:
                     results[orig_idx]["confirmed"]   = 0  # LLM guess — not confirmed
 
         except ollama.ResponseError as e:
-            print(f"[categorizer] Ollama error: {e}")
+            logger.error("[categorizer] Ollama error: %s", e)
         except ConnectionError:
-            print("[categorizer] Ollama is not running — start it with: ollama serve")
+            logger.error("[categorizer] Ollama is not running — start it with: ollama serve")
         except json.JSONDecodeError as e:
-            print(f"[categorizer] Could not parse LLM response as JSON: {e}")
+            logger.error("[categorizer] Could not parse LLM response as JSON: %s", e)
         except Exception as e:  # noqa: BLE001
-            print(f"[categorizer] Unexpected error: {e}")
+            logger.error("[categorizer] Unexpected error: %s", e)
 
     return results
