@@ -15,7 +15,9 @@ export default function App() {
   // Fetch the unconfirmed count so the sidebar badge stays up to date.
   // Any view can call refreshReviewCount() after confirming transactions.
   const refreshReviewCount = () => {
-    api.getSummary().then(d => setReviewCount(d.review_count ?? 0)).catch(() => {})
+    api.getSummary().then(d => setReviewCount(d.review_count ?? 0)).catch(err => {
+      console.warn('refreshReviewCount failed — badge may be stale:', err)
+    })
   }
 
   useEffect(() => { refreshReviewCount() }, [])

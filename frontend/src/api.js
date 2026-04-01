@@ -8,20 +8,23 @@
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-const get  = url       => fetch(`${BASE}${url}`).then(r => r.json())
+// Throw on non-2xx so callers get a real error instead of a silent JSON parse of an error body.
+const _check = r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r }
+
+const get  = url       => fetch(`${BASE}${url}`).then(_check).then(r => r.json())
 const post = (url, body) =>
   fetch(`${BASE}${url}`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
-  }).then(r => r.json())
+  }).then(_check).then(r => r.json())
 
 const patch = (url, body) =>
   fetch(`${BASE}${url}`, {
     method:  'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
-  }).then(r => r.json())
+  }).then(_check).then(r => r.json())
 
 export const api = {
   // Summary + stats
@@ -90,6 +93,6 @@ export const api = {
   deleteCorrection:  (key) => {
     return fetch(`${BASE}/api/corrections/${encodeURIComponent(key)}`, {
       method: 'DELETE',
-    }).then(r => r.json())
+    }).then(_check).then(r => r.json())
   },
 }

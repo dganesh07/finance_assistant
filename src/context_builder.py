@@ -135,21 +135,31 @@ def _section_profile() -> str:
 
 def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
     """
-    Return the most recent N *likely-complete* calendar months on or after config.BURN_RATE_START.
+    Return the most recent N *confirmed-complete* calendar months on or after config.BURN_RATE_START.
 
-    'Likely complete' means the month ended at least 5 weeks ago.
-    Why: TD statements run mid-month to mid-month (e.g. Dec31–Jan27, Jan27–Feb28).
-    If you import only one statement, the month it straddles will be partially covered.
-    Waiting 5 weeks from month-end means the following statement has almost certainly
-    been downloaded and imported, so both halves of that month are in the DB.
+    A month is complete when spending_periods.is_complete = 1, meaning all accounts
+    have a statement that covers that calendar month (covers_month = 1).
+    This is set by upsert_spending_periods() when statements are imported.
 
-    This is a heuristic, not a guarantee — if you haven't imported a statement yet,
-    that month's total will still be understated. The fix is: import all statements
-    before reading burn rate numbers.
+    Falls back to a 5-week date heuristic if spending_periods has no complete months yet
+    (e.g. first import, or spending_periods table is empty).
     """
-    cutoff = (date.today() - timedelta(weeks=5)).strftime("%Y-%m")
-
     rows = conn.execute("""
+        SELECT month
+        FROM spending_periods
+        WHERE is_complete = 1
+          AND month >= ?
+        ORDER BY month DESC
+        LIMIT ?
+    """, (config.BURN_RATE_START, limit)).fetchall()
+
+    if rows:
+        return [r["month"] for r in rows]
+
+    # Fallback: heuristic (month ended at least 5 weeks ago means the next statement
+    # covering it has likely been imported).
+    cutoff = (date.today() - timedelta(weeks=5)).strftime("%Y-%m")
+    fallback = conn.execute("""
         SELECT DISTINCT strftime('%Y-%m', date) AS month
         FROM transactions
         WHERE strftime('%Y-%m', date) >= ?
@@ -157,7 +167,7 @@ def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
         ORDER BY month DESC
         LIMIT ?
     """, (config.BURN_RATE_START, cutoff, limit)).fetchall()
-    return [r["month"] for r in rows]
+    return [r["month"] for r in fallback]
 
 
 def _section_monthly_spending(conn: sqlite3.Connection) -> str:
