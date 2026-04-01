@@ -40,6 +40,7 @@ import json
 import sqlite3
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -76,9 +77,40 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
-# ── In-memory job tracker (background categorizer runs) ───────────────────────
+# ── Job tracker — in-memory + persisted to data/jobs.json ─────────────────────
+#
+# Jobs are kept in _jobs (fast in-memory lookup) AND written to disk so that
+# GET /api/job/{id} returns a meaningful error after a server restart instead of
+# a 404 that leaves the UI polling forever.
+#
+# On startup: any job still "running" or "pending" is marked "failed" — it will
+# never complete because the background thread died with the old server process.
 
-_jobs: dict[str, dict] = {}
+_JOBS_FILE: Path = Path("data/jobs.json")
+
+
+def _load_jobs_from_disk() -> dict:
+    try:
+        return json.loads(_JOBS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_jobs_to_disk() -> None:
+    try:
+        _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _JOBS_FILE.write_text(json.dumps(_jobs, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # non-critical — in-memory state is still correct
+
+
+# Load persisted jobs on startup; mark any in-progress ones as failed
+_jobs: dict[str, dict] = _load_jobs_from_disk()
+for _job in _jobs.values():
+    if _job.get("status") in ("running", "pending"):
+        _job["status"] = "failed"
+        _job["error"]  = "Server was restarted — job did not complete."
+_save_jobs_to_disk()
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -129,13 +161,15 @@ def get_bills():
 @app.get("/api/summary")
 def get_summary(days: int = 60):
     """
-    Spending summary for the last N days.
+    Spending summary for the last N days (1–365).
 
     - total_in / total_out exclude transfers and fee rebates (same logic as check_db)
     - runway_months = TD chequing closing balance / avg_monthly_spend (last N days).
       Returns None when no account_balances row exists for chequing.
     - review_count = transactions with confirmed=0
     """
+    if not 1 <= days <= 365:
+        raise HTTPException(400, "days must be between 1 and 365")
     period_start = (date.today() - timedelta(days=days)).isoformat()
     conn = get_conn()
 
@@ -400,6 +434,7 @@ def _run_categorizer_job(job_id: str) -> None:
     sends them to the Ollama categorizer, writes results back to DB.
     """
     _jobs[job_id] = {"status": "running", "processed": 0, "categorized": 0}
+    _save_jobs_to_disk()
     try:
         conn = get_conn()
         rows = conn.execute("""
@@ -412,6 +447,7 @@ def _run_categorizer_job(job_id: str) -> None:
         txns = [dict(r) for r in rows]
         if not txns:
             _jobs[job_id] = {"status": "done", "processed": 0, "categorized": 0}
+            _save_jobs_to_disk()
             conn.close()
             return
 
@@ -429,9 +465,11 @@ def _run_categorizer_job(job_id: str) -> None:
         conn.commit()
         conn.close()
         _jobs[job_id] = {"status": "done", "processed": len(txns), "categorized": categorized}
+        _save_jobs_to_disk()
 
     except Exception as e:
         _jobs[job_id] = {"status": "error", "error": str(e)}
+        _save_jobs_to_disk()
 
 
 @app.post("/api/run-categorizer")
@@ -529,6 +567,8 @@ def get_monthly(months: int = 6):
       - net        : total_in - (total_out - refunds)
       - by_category: list of { category, total, count } sorted by total desc
     """
+    if not 1 <= months <= 24:
+        raise HTTPException(400, "months must be between 1 and 24")
     conn = get_conn()
 
     month_rows = conn.execute("""
@@ -1163,8 +1203,15 @@ def _read_corrections_file() -> dict:
 
 
 def _write_corrections_file(data: dict) -> None:
-    """Serialise data to corrections.json with 2-space indent."""
-    CORRECTIONS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    """Serialise data to corrections.json atomically (write-to-temp then replace).
+
+    Writing directly to the target file risks corruption if the server crashes
+    mid-write or two requests fire simultaneously.  Writing to a temp file first
+    and then calling replace() is an atomic operation on POSIX systems.
+    """
+    tmp = CORRECTIONS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(CORRECTIONS_FILE)
 
 
 @app.get("/api/corrections")

@@ -226,15 +226,27 @@ export default function Review({ onConfirm }) {
     setJobResult(null)
     const { job_id } = await api.runCategorizer()
 
-    // Poll every 1.5s until done
+    // Poll every 1.5s — give up after 10 minutes (400 polls) so the UI never
+    // spins forever if Ollama hangs or the server restarts mid-job.
+    const MAX_POLLS = 400
+    let pollCount = 0
+
     const poll = setInterval(async () => {
+      pollCount++
+      if (pollCount >= MAX_POLLS) {
+        clearInterval(poll)
+        setJobStatus('error')
+        setJobResult({ error: 'Timed out after 10 minutes. Is Ollama running?' })
+        return
+      }
+
       const job = await api.getJob(job_id)
       if (job.status === 'done') {
         clearInterval(poll)
         setJobStatus('done')
         setJobResult(job)
         load() // refresh the table
-      } else if (job.status === 'error') {
+      } else if (job.status === 'error' || job.status === 'failed') {
         clearInterval(poll)
         setJobStatus('error')
         setJobResult(job)

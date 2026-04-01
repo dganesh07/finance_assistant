@@ -21,13 +21,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.parser import (
-    normalise_date,
-    parse_csv,
-    _CC_PERIOD_RE,
-    _CHQ_PERIOD_RE,
+from src.parser import normalise_date, parse_csv
+from src.parser_td import (
     _parse_td_header_date,
     _parse_cc_date,
+    _CC_PERIOD_RE,
+    _CHQ_PERIOD_RE,
 )
 
 
