@@ -301,6 +301,40 @@ class TestCategorizeTransactions(unittest.TestCase):
             result = categorize_transactions(txns)  # must not raise
         self.assertEqual(len(result), 1)
 
+    def test_batch_boundary_exactly_20(self):
+        """Exactly 20 transactions = 1 batch; Ollama should be called exactly once."""
+        from src.categorizer import BATCH_SIZE
+        self.assertEqual(BATCH_SIZE, 20, "BATCH_SIZE changed — update this test")
+
+        txns = [_txn(f"MERCHANT {i}") for i in range(20)]
+        llm_reply = [{"index": i + 1, "category": "other", "subcategory": None} for i in range(20)]
+
+        with patch("src.categorizer.ollama.chat", return_value=_ollama_response(llm_reply)) as mock_chat:
+            result = categorize_transactions(txns)
+
+        self.assertEqual(mock_chat.call_count, 1, "Exactly 1 batch expected for 20 transactions")
+        self.assertEqual(len(result), 20)
+
+    def test_batch_boundary_21_makes_two_batches(self):
+        """21 transactions = 2 batches (20 + 1); Ollama called twice."""
+        txns = [_txn(f"MERCHANT {i}") for i in range(21)]
+        # First batch: 20 results, second batch: 1 result
+        first_reply  = [{"index": i + 1, "category": "other", "subcategory": None} for i in range(20)]
+        second_reply = [{"index": 1, "category": "other", "subcategory": None}]
+
+        call_count = 0
+        def _side_effect(*args, **kwargs):
+            nonlocal call_count
+            reply = first_reply if call_count == 0 else second_reply
+            call_count += 1
+            return _ollama_response(reply)
+
+        with patch("src.categorizer.ollama.chat", side_effect=_side_effect):
+            result = categorize_transactions(txns)
+
+        self.assertEqual(call_count, 2, "2 batches expected for 21 transactions")
+        self.assertEqual(len(result), 21)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

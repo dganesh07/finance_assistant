@@ -132,9 +132,8 @@ def get_summary(days: int = 60):
     Spending summary for the last N days.
 
     - total_in / total_out exclude transfers and fee rebates (same logic as check_db)
-    - runway_months = total_in / avg_monthly_spend — NOTE: approximate only.
-      TD credits are mostly internal transfers (not income); for accurate runway
-      use GET /api/dashboard which reads the TD Chequing balance from account_balances.
+    - runway_months = TD chequing closing balance / avg_monthly_spend (last N days).
+      Returns None when no account_balances row exists for chequing.
     - review_count = transactions with confirmed=0
     """
     period_start = (date.today() - timedelta(days=days)).isoformat()
@@ -168,8 +167,16 @@ def get_summary(days: int = 60):
         ORDER BY total DESC
     """, (period_start,)).fetchall()
 
-    avg_monthly   = (total_out / days) * 30 if days > 0 and total_out > 0 else 0
-    runway_months = round(total_in / avg_monthly, 1) if avg_monthly > 0 else None
+    avg_monthly = (total_out / days) * 30 if days > 0 and total_out > 0 else 0
+
+    # Runway: use actual TD chequing closing balance, not total_in which includes transfers
+    bal_row = conn.execute("""
+        SELECT closing_balance FROM account_balances
+        WHERE account = 'chequing'
+        ORDER BY statement_month DESC LIMIT 1
+    """).fetchone()
+    td_balance    = bal_row["closing_balance"] if bal_row else None
+    runway_months = round(td_balance / avg_monthly, 1) if td_balance and avg_monthly > 0 else None
 
     review_count = conn.execute(
         "SELECT COUNT(*) FROM transactions WHERE confirmed = 0"
@@ -683,18 +690,15 @@ def get_spending_periods():
     """
     All calendar months that have transactions, with per-account coverage detail.
 
-    Each month returns an `accounts` array — one entry per account that has a
-    statement imported for that month, with the official statement start/end dates
-    and whether that account's statement fully covers the calendar month.
-
-    The top-level `is_complete` flag (from spending_periods) is retained as a
-    fallback signal but the `accounts` array is the authoritative source for the
-    month-picker UI: show what's there, let the user judge completeness themselves.
+    Each month returns:
+      - is_complete: 1 if all accounts with balance data for that month have
+        full statement coverage (covers_month = 1).
+      - accounts: per-account statement start/end + covers_month flag.
 
     Example response item:
       {
         "period_label": "2026-02",
-        "is_baseline":  1,
+        "is_complete":  0,
         "accounts": [
           { "account": "chequing",   "statement_start": "2026-01-30",
             "statement_end": "2026-02-27", "covers_month": false },
@@ -707,7 +711,7 @@ def get_spending_periods():
     conn = get_conn()
 
     periods = conn.execute("""
-        SELECT period_label, is_baseline
+        SELECT period_label, is_complete
         FROM spending_periods
         ORDER BY period_label DESC
     """).fetchall()
@@ -725,7 +729,7 @@ def get_spending_periods():
 
         result.append({
             "period_label": month,
-            "is_baseline":  period["is_baseline"],
+            "is_complete":  period["is_complete"],
             "accounts": [
                 {
                     "account":         r["account"],

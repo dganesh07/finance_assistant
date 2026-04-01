@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS spending_periods (
     period_label TEXT    NOT NULL UNIQUE,      -- 'YYYY-MM', e.g. '2026-01'
     year         INTEGER NOT NULL,
     month        INTEGER NOT NULL,             -- 1–12
-    is_baseline  INTEGER DEFAULT 1,            -- 0 = non-representative month, skip in baselines
+    is_complete  INTEGER DEFAULT 0,            -- 1 = all account statements cover the full calendar month
     notes        TEXT,
     UNIQUE(year, month)
 );

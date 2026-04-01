@@ -40,6 +40,7 @@ finance-assistant/
 │   ├── test_api.py                 ← unit tests for FastAPI endpoints (TestClient, no LLM)
 │   ├── test_context_builder.py     ← unit tests for context builder helpers
 │   ├── test_categorizer.py         ← unit tests for categorizer (mocked Ollama, no LLM needed)
+│   ├── test_parser.py              ← unit tests for parser helpers (date parsing, CSV edge cases, regexes)
 │   ├── test_sheets_connector.py    ← unit tests for Sheets column-matching logic
 │   └── test_portfolio_connector.py ← unit tests for portfolio connector (mocked gspread)
 ├── data/

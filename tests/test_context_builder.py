@@ -18,6 +18,7 @@ from src.context_builder import (
     _next_month,
     _baseline_months,
     _section_bills,
+    _section_burn_and_runway,
 )
 
 
@@ -102,15 +103,15 @@ def test_baseline_months_returns_complete_months():
     old_dates = ["2025-12-15", "2025-12-20", "2026-01-10", "2026-01-25"]
     conn = _make_test_db(old_dates)
 
-    import src.context_builder as cb
-    original = cb.BURN_RATE_START
-    cb.BURN_RATE_START = "2025-12"
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-12"
     try:
         months = _baseline_months(conn, limit=3)
         assert "2025-12" in months
         assert "2026-01" in months
     finally:
-        cb.BURN_RATE_START = original
+        config.BURN_RATE_START = original
     conn.close()
 
 
@@ -119,14 +120,14 @@ def test_baseline_months_excludes_current_month():
     current = today.strftime("%Y-%m-%d")
     conn = _make_test_db([current])
 
-    import src.context_builder as cb
-    original = cb.BURN_RATE_START
-    cb.BURN_RATE_START = today.strftime("%Y-%m")
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = today.strftime("%Y-%m")
     try:
         months = _baseline_months(conn, limit=3)
         assert today.strftime("%Y-%m") not in months
     finally:
-        cb.BURN_RATE_START = original
+        config.BURN_RATE_START = original
     conn.close()
 
 
@@ -134,15 +135,15 @@ def test_baseline_months_respects_burn_rate_start():
     # Oct 2025 is before BURN_RATE_START=2025-12 — should be excluded
     conn = _make_test_db(["2025-10-15", "2025-12-15"])
 
-    import src.context_builder as cb
-    original = cb.BURN_RATE_START
-    cb.BURN_RATE_START = "2025-12"
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-12"
     try:
         months = _baseline_months(conn, limit=3)
         assert "2025-10" not in months
         assert "2025-12" in months
     finally:
-        cb.BURN_RATE_START = original
+        config.BURN_RATE_START = original
     conn.close()
 
 
@@ -154,19 +155,19 @@ def test_baseline_months_empty_db():
 
 
 def test_baseline_months_limit():
-    # Dates well before the real BURN_RATE_START — patch the module-level constant
-    # in context_builder (not config) because context_builder imported it by value.
+    # Patch config.BURN_RATE_START — context_builder now uses config.BURN_RATE_START
+    # so patching the config module propagates correctly.
     old_dates = ["2025-12-15", "2026-01-15", "2026-01-20", "2026-01-25", "2026-01-28"]
     conn = _make_test_db(old_dates)
 
-    import src.context_builder as cb
-    original = cb.BURN_RATE_START
-    cb.BURN_RATE_START = "2025-12"
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-12"
     try:
         months = _baseline_months(conn, limit=2)
         assert len(months) <= 2   # capped at limit
     finally:
-        cb.BURN_RATE_START = original
+        config.BURN_RATE_START = original
     conn.close()
 
 
@@ -233,3 +234,121 @@ def test_next_month_zero_padding():
     result = _next_month(2026, 8)
     assert result == "2026-09-01"
     assert result[5:7] == "09"
+
+
+# ── _baseline_months: future BURN_RATE_START ──────────────────────────────────
+
+def test_baseline_months_future_burn_rate_start_returns_empty():
+    # If BURN_RATE_START is set to a future month, no months qualify
+    conn = _make_test_db(["2026-01-15", "2026-02-15"])
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2099-01"
+    try:
+        months = _baseline_months(conn, limit=3)
+        assert months == []
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+
+# ── _section_burn_and_runway: zero and no-balance edge cases ──────────────────
+
+def _make_full_test_db(transaction_dates: list[str], chequing_balance: float | None = None) -> sqlite3.Connection:
+    """Spin up an in-memory SQLite DB with transactions + account_balances tables."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY,
+            date TEXT,
+            description TEXT,
+            amount REAL,
+            type TEXT,
+            account TEXT,
+            category TEXT,
+            subcategory TEXT,
+            confirmed INTEGER DEFAULT 0,
+            is_one_time INTEGER DEFAULT 0,
+            source_file TEXT,
+            hash TEXT,
+            notes TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE account_balances (
+            id INTEGER PRIMARY KEY,
+            account TEXT,
+            statement_month TEXT,
+            opening_balance REAL,
+            closing_balance REAL,
+            statement_start TEXT,
+            statement_end TEXT,
+            covers_month INTEGER DEFAULT 0
+        )
+    """)
+    for d in transaction_dates:
+        conn.execute(
+            "INSERT INTO transactions (date, description, amount, type, category, is_one_time) "
+            "VALUES (?, 'TEST', 100.0, 'debit', 'groceries', 0)",
+            (d,),
+        )
+    if chequing_balance is not None:
+        conn.execute(
+            "INSERT INTO account_balances (account, statement_month, opening_balance, closing_balance) "
+            "VALUES ('chequing', '2025-10', 5000.0, ?)",
+            (chequing_balance,),
+        )
+    conn.commit()
+    return conn
+
+
+def test_burn_and_runway_no_balance_row():
+    # No account_balances row → runway section should say no data, not crash
+    conn = _make_full_test_db(["2025-10-15"])
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-10"
+    try:
+        result = _section_burn_and_runway(conn)
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+    assert "no account_balances data" in result.lower() or "import" in result.lower()
+
+
+def test_burn_and_runway_zero_balance_no_crash():
+    # TD chequing balance = 0 → runway = 0 months, no ZeroDivisionError
+    conn = _make_full_test_db(["2025-10-15"], chequing_balance=0.0)
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-10"
+    try:
+        result = _section_burn_and_runway(conn)
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+    # Must not crash; 0 / burn = 0 months
+    assert "runway" in result.lower() or "0.0" in result
+
+
+def test_burn_and_runway_negative_balance_no_crash():
+    # Overdraft scenario — negative balance → negative runway, no crash
+    conn = _make_full_test_db(["2025-10-15"], chequing_balance=-150.0)
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-10"
+    try:
+        result = _section_burn_and_runway(conn)
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+    assert isinstance(result, str)

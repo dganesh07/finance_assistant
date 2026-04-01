@@ -204,13 +204,17 @@ def parse_csv(file_path: Path) -> list[dict]:
         sep = ","
 
     # TD headerless format: no column row, fixed 5-column order
-    if _is_td_headerless(file_path):
-        df = pd.read_csv(file_path, sep=sep, encoding="utf-8-sig",
-                         header=None, names=_TD_HEADERLESS_COLS,
-                         skip_blank_lines=True, dtype=str)
-    else:
-        df = pd.read_csv(file_path, sep=sep, encoding="utf-8-sig",
-                         skip_blank_lines=True, dtype=str)
+    try:
+        if _is_td_headerless(file_path):
+            df = pd.read_csv(file_path, sep=sep, encoding="utf-8-sig",
+                             header=None, names=_TD_HEADERLESS_COLS,
+                             skip_blank_lines=True, dtype=str)
+        else:
+            df = pd.read_csv(file_path, sep=sep, encoding="utf-8-sig",
+                             skip_blank_lines=True, dtype=str)
+    except pd.errors.EmptyDataError:
+        log.debug("parse_csv: %s is empty — skipping", file_path.name)
+        return []
 
     # Drop fully-empty rows
     df.dropna(how="all", inplace=True)
@@ -1110,18 +1114,26 @@ def upsert_spending_periods(
 ) -> None:
     """
     Ensure every calendar month touched by these transaction rows exists in
-    spending_periods, then update covers_month on every account_balances row.
+    spending_periods, then cascade completeness flags:
 
-    covers_month logic (stored on account_balances, not spending_periods):
-      For each (account, statement_month) row in account_balances, covers_month=1
-      if ANY statement for that account has stmt_start <= last_day AND
-      stmt_end >= last_day of that calendar month.
+      1. Seed spending_periods — INSERT OR IGNORE each calendar month.
+      2. Update covers_month per (account, month) in account_balances.
+      3. Update is_complete per month in spending_periods.
 
-      This handles the rolling-statement case: e.g. the Dec statement starts
-      Nov 28 — importing Dec sets covers_month=1 on the Nov chequing row because
-      Dec stmt_start (Nov 28) ≤ Nov 30 and Dec stmt_end (Dec 31) ≥ Nov 30.
+    covers_month (on account_balances):
+      For each (account, statement_month) row, covers_month = 1 if ANY
+      statement for that account has stmt_start <= last_day_of_month AND
+      stmt_end >= last_day_of_month.
 
-    Uses INSERT OR IGNORE so pre-seeded spending_periods rows keep is_baseline.
+      Example: Feb CC statement runs Feb 1–27.  Feb 28 is NOT covered.
+      When the March CC statement arrives (Feb 28–Mar 27), it covers Feb 28,
+      so covers_month flips to 1 on the Feb CC row.
+
+    is_complete (on spending_periods):
+      A month is complete when EVERY account that has an account_balances
+      row for that month also has covers_month = 1.  This means all
+      statement files needed to reconstruct the full calendar month have
+      been imported.
 
     Args:
         rows:       normalised transaction dicts with a 'date' key (YYYY-MM-DD).
@@ -1136,21 +1148,21 @@ def upsert_spending_periods(
         if date_str and len(date_str) >= 7:
             months_seen.add(date_str[:7])  # 'YYYY-MM'
 
-    # Seed any new months into spending_periods
+    # Step 1: Seed any new months into spending_periods.
     for label in months_seen:
         year, month = int(label[:4]), int(label[5:7])
         conn.execute(
             """
             INSERT OR IGNORE INTO spending_periods
-                (period_label, year, month, is_baseline)
-            VALUES (?, ?, ?, 1)
+                (period_label, year, month)
+            VALUES (?, ?, ?)
             """,
             (label, year, month),
         )
 
     conn.commit()
 
-    # Update covers_month on every account_balances row.
+    # Step 2: Update covers_month on every account_balances row.
     # For each (account, statement_month) pair, covers_month = 1 if any
     # statement for that account covers the last day of statement_month.
     acct_months = conn.execute(
@@ -1182,6 +1194,25 @@ def upsert_spending_periods(
 
     conn.commit()
 
+    # Step 3: Propagate to spending_periods.is_complete.
+    # A month is complete when ALL accounts with balance data for that month
+    # have covers_month = 1.  Months with no account_balances rows (e.g.
+    # CSV-only imports) stay is_complete = 0.
+    conn.execute("""
+        UPDATE spending_periods
+        SET is_complete = (
+            SELECT CASE
+                WHEN COUNT(*) = 0 THEN 0
+                WHEN MIN(covers_month) = 1 THEN 1
+                ELSE 0
+            END
+            FROM account_balances
+            WHERE statement_month = spending_periods.period_label
+        )
+    """)
+
+    conn.commit()
+
 
 # ── Statement balance verification ───────────────────────────────────────────
 #
@@ -1210,12 +1241,13 @@ _DOLLAR_RE         = re.compile(r"\$?([\d,]+\.\d{2})")
 #
 # TD credit card (words concatenated by pdfplumber — no spaces between tokens):
 #   "STATEMENTPERIOD:December30,2025toJanuary27,2026"
+# Also handles "BILLING PERIOD" and "ACCOUNT PERIOD" used by other TD CC products.
 _CHQ_PERIOD_RE = re.compile(
     r"([A-Z]{3}\s*\d{1,2}/\d{2})\s*-\s*([A-Z]{3}\s*\d{1,2}/\d{2})",
     re.IGNORECASE,
 )
 _CC_PERIOD_RE = re.compile(
-    r"STATEMENT\s*PERIOD\s*:?\s*"
+    r"(?:STATEMENT|BILLING|ACCOUNT)\s*PERIOD\s*:?\s*"
     r"([A-Za-z]+\s*\d{1,2}\s*,\s*\d{4})"   # start: "December30,2025"
     r"\s*to\s*"
     r"([A-Za-z]+\s*\d{1,2}\s*,\s*\d{4})",  # end:   "January27,2026"

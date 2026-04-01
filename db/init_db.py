@@ -37,21 +37,27 @@ def initialize_db() -> None:
     # ── Additive migrations ────────────────────────────────────────────────
     # Each ALTER TABLE is wrapped in a try/except: SQLite raises OperationalError
     # if the column already exists, which we safely ignore.
-    migrations = [
+    # ── Additive column migrations ───────────────────────────────────────
+    add_columns = [
         "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
         "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
         "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
         "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
         "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
+        "ALTER TABLE spending_periods ADD COLUMN is_complete INTEGER DEFAULT 0",
     ]
-    for sql in migrations:
+    for sql in add_columns:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
             pass  # column already exists — safe to ignore
 
-    # Note: burn rate baseline cutoff is configured in config.py (BURN_RATE_START),
-    # not here. init_db is pure infrastructure — no personal context belongs here.
+    # ── Column removal: is_baseline was replaced by BURN_RATE_START config ─
+    # SQLite 3.35.0+ supports DROP COLUMN; older versions silently skip.
+    try:
+        conn.execute("ALTER TABLE spending_periods DROP COLUMN is_baseline")
+    except sqlite3.OperationalError:
+        pass  # column already gone, or SQLite too old — harmless either way
 
     conn.commit()
     conn.close()

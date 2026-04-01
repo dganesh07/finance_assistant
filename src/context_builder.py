@@ -18,7 +18,8 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
-from config import BILLS_FILE, BURN_RATE_START, DB_PATH, PROFILE_FILE
+import config
+from config import BILLS_FILE, DB_PATH, PROFILE_FILE
 
 # Categories excluded from spending totals — money movements, not discretionary spend
 _NON_SPEND = {"transfer", "fees", "investment", "income"}
@@ -134,7 +135,7 @@ def _section_profile() -> str:
 
 def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
     """
-    Return the most recent N *likely-complete* calendar months on or after BURN_RATE_START.
+    Return the most recent N *likely-complete* calendar months on or after config.BURN_RATE_START.
 
     'Likely complete' means the month ended at least 5 weeks ago.
     Why: TD statements run mid-month to mid-month (e.g. Dec31–Jan27, Jan27–Feb28).
@@ -155,26 +156,26 @@ def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
           AND strftime('%Y-%m', date) <= ?
         ORDER BY month DESC
         LIMIT ?
-    """, (BURN_RATE_START, cutoff, limit)).fetchall()
+    """, (config.BURN_RATE_START, cutoff, limit)).fetchall()
     return [r["month"] for r in rows]
 
 
 def _section_monthly_spending(conn: sqlite3.Connection) -> str:
     """
     Monthly spending breakdown for the last 3 complete baseline months + current MTD.
-    Earlier months (before BURN_RATE_START) are excluded from all calculations here.
+    Earlier months (before config.BURN_RATE_START) are excluded from all calculations here.
     """
     baseline_months = _baseline_months(conn, limit=3)
 
     if not baseline_months:
         return (
             f"MONTHLY SPENDING\n─\n"
-            f"  [No complete months found from {BURN_RATE_START} onwards yet.\n"
+            f"  [No complete months found from {config.BURN_RATE_START} onwards yet.\n"
             f"   Import statements and wait until a full month has passed to see burn rate data.]"
         )
 
     lines = [
-        f"MONTHLY SPENDING (from {BURN_RATE_START} onwards — earlier months excluded from burn rate)",
+        f"MONTHLY SPENDING (from {config.BURN_RATE_START} onwards — earlier months excluded from burn rate)",
         "─" * 60,
     ]
 
@@ -336,7 +337,7 @@ def _section_burn_and_runway(conn: sqlite3.Connection) -> str:
 
     if monthly_totals:
         avg_burn = sum(monthly_totals) / len(monthly_totals)
-        lines.append(f"  Average monthly spend (months from {BURN_RATE_START} onwards: {', '.join(baseline_months)})")
+        lines.append(f"  Average monthly spend (months from {config.BURN_RATE_START} onwards: {', '.join(baseline_months)})")
         for month, total in zip(baseline_months, monthly_totals):
             lines.append(f"    {month}: {_fmt(total)}")
         lines.append(f"  Average monthly burn: {_fmt(avg_burn)}")

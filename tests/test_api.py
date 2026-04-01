@@ -54,6 +54,7 @@ def client(tmp_path, monkeypatch):
         "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
         "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
         "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
+        "ALTER TABLE spending_periods ADD COLUMN is_complete INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -480,3 +481,151 @@ class TestMonthlySubcategories:
         assert gas is not None
         assert gas["total"] == pytest.approx(85.0, rel=0.01)
         assert gas["count"] == 2
+
+
+# ── /api/dashboard ────────────────────────────────────────────────────────────
+
+class TestDashboard:
+    def test_empty_db_returns_empty_available(self, client):
+        resp = client.get("/api/dashboard")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["available_months"] == []
+        assert data["month"] is None
+
+    def test_response_shape_with_data(self, client):
+        _insert_txn(client, date="2026-01-15", amount=100.0, category="groceries")
+        _insert_txn(client, date="2026-01-20", amount=50.0,  category="transport", type="debit")
+        _insert_txn(client, date="2026-01-25", amount=200.0, category="income",    type="credit")
+
+        resp = client.get("/api/dashboard?month=2026-01")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Required top-level keys
+        for key in ("month", "label", "is_current_month", "txn_count",
+                    "spent", "income", "refunds", "net",
+                    "prev", "fixed_total", "variable_total",
+                    "runway_months", "avg_burn", "td_balance",
+                    "accounts_covered", "categories",
+                    "one_time_charges", "subscriptions", "available_months"):
+            assert key in data, f"Missing key in dashboard response: {key}"
+
+        assert data["month"] == "2026-01"
+        assert isinstance(data["categories"], list)
+        assert isinstance(data["available_months"], list)
+        assert "2026-01" in data["available_months"]
+        assert isinstance(data["prev"], dict)
+        assert "spent" in data["prev"]
+        assert "income" in data["prev"]
+
+    def test_spent_excludes_transfer_and_fees(self, client):
+        _insert_txn(client, date="2026-02-10", amount=100.0, category="groceries")
+        _insert_txn(client, date="2026-02-11", amount=500.0, category="transfer")   # excluded
+        _insert_txn(client, date="2026-02-12", amount=10.0,  category="fees")       # excluded
+
+        resp = client.get("/api/dashboard?month=2026-02")
+        data = resp.json()
+        assert data["spent"] == pytest.approx(100.0, rel=0.01)
+
+    def test_runway_null_when_no_td_balance(self, client):
+        # No account_balances row → runway should be None
+        _insert_txn(client, date="2026-02-10", amount=100.0, category="groceries")
+        data = client.get("/api/dashboard?month=2026-02").json()
+        assert data["runway_months"] is None
+
+
+# ── /api/portfolio ────────────────────────────────────────────────────────────
+
+class TestPortfolio:
+    def test_returns_error_shape_when_not_configured(self, client, monkeypatch):
+        import api as api_module
+        monkeypatch.setattr(api_module, "GOOGLE_SHEET_ID", "", raising=False)
+
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "error" in data
+        assert data["accounts"] == []
+        assert data["summary"] == {}
+        assert data["investment_transactions"] == []
+        assert data["holdings"] == {}
+
+    def test_returns_error_shape_on_sheets_failure(self, client, monkeypatch):
+        import api as api_module
+        monkeypatch.setattr(api_module, "GOOGLE_SHEET_ID", "fake-sheet-id", raising=False)
+        monkeypatch.setattr(api_module, "load_portfolio", lambda **_: None, raising=False)
+
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "error" in data
+        assert data["accounts"] == []
+
+
+# ── /api/summary — runway fix verification ───────────────────────────────────
+
+class TestSummaryRunwayFix:
+    def test_runway_uses_td_balance_not_total_in(self, client):
+        import sqlite3
+        import api as api_module
+
+        # Insert a transaction so avg_monthly > 0
+        _insert_txn(client, date="2026-01-15", amount=300.0, category="groceries", type="debit")
+
+        # Also insert a big credit that looks like a transfer — should NOT drive runway
+        _insert_txn(client, date="2026-01-16", amount=5000.0, category="transfer", type="credit")
+
+        # No account_balances row → runway must be None (not 5000 / burn)
+        resp = client.get("/api/summary?days=365")
+        data = resp.json()
+        assert data["runway_months"] is None
+
+    def test_runway_uses_td_chequing_balance(self, client, tmp_path, monkeypatch):
+        import sqlite3
+        import api as api_module
+
+        # Wire a custom get_conn that includes account_balances
+        db_path = tmp_path / "rw_test.db"
+        from config import SCHEMA_FILE
+        conn = sqlite3.connect(db_path)
+        conn.executescript(SCHEMA_FILE.read_text())
+        migrations = [
+            "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
+            "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
+            "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
+            "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
+            "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
+        # Insert 30 days of spend at $100/day so avg_monthly ~$3000
+        conn.execute(
+            "INSERT INTO transactions (date, description, amount, type, category, confirmed, account) "
+            "VALUES ('2026-01-15', 'GROCERIES', 3000.0, 'debit', 'groceries', 1, 'td_chequing')"
+        )
+        # TD chequing balance = $6000
+        conn.execute(
+            "INSERT INTO account_balances (account, statement_month, opening_balance, closing_balance) "
+            "VALUES ('chequing', '2026-01', 7000.0, 6000.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        def _get_conn():
+            c = sqlite3.connect(db_path)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(api_module, "get_conn", _get_conn)
+
+        resp = api_module.app.build_middleware_stack  # just ensure import ok
+        from fastapi.testclient import TestClient
+        tc = TestClient(api_module.app)
+        data = tc.get("/api/summary?days=365").json()
+        # runway should be td_balance / avg_monthly = 6000 / ~3000 ≈ 2.0, NOT None
+        assert data["runway_months"] is not None
+        assert data["runway_months"] > 0
