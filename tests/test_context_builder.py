@@ -68,7 +68,7 @@ def test_next_month_november():
 # ── _baseline_months — in-memory DB ───────────────────────────────────────────
 
 def _make_test_db(transaction_dates: list[str]) -> sqlite3.Connection:
-    """Spin up an in-memory SQLite DB with the transactions table and dummy rows."""
+    """Spin up an in-memory SQLite DB with the transactions + spending_periods tables."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -87,6 +87,19 @@ def _make_test_db(transaction_dates: list[str]) -> sqlite3.Connection:
             hash TEXT,
             notes TEXT,
             created_at TEXT
+        )
+    """)
+    # _baseline_months queries spending_periods.period_label; create table matching
+    # the real schema so the primary path runs (empty → falls back to heuristic).
+    conn.execute("""
+        CREATE TABLE spending_periods (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_label TEXT    NOT NULL UNIQUE,
+            year         INTEGER NOT NULL,
+            month        INTEGER NOT NULL,
+            is_complete  INTEGER DEFAULT 0,
+            notes        TEXT,
+            UNIQUE(year, month)
         )
     """)
     for d in transaction_dates:
@@ -256,7 +269,7 @@ def test_baseline_months_future_burn_rate_start_returns_empty():
 # ── _section_burn_and_runway: zero and no-balance edge cases ──────────────────
 
 def _make_full_test_db(transaction_dates: list[str], chequing_balance: float | None = None) -> sqlite3.Connection:
-    """Spin up an in-memory SQLite DB with transactions + account_balances tables."""
+    """Spin up an in-memory SQLite DB with transactions + account_balances + spending_periods."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -287,6 +300,18 @@ def _make_full_test_db(transaction_dates: list[str], chequing_balance: float | N
             statement_start TEXT,
             statement_end TEXT,
             covers_month INTEGER DEFAULT 0
+        )
+    """)
+    # _baseline_months queries spending_periods.period_label; match real schema.
+    conn.execute("""
+        CREATE TABLE spending_periods (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_label TEXT    NOT NULL UNIQUE,
+            year         INTEGER NOT NULL,
+            month        INTEGER NOT NULL,
+            is_complete  INTEGER DEFAULT 0,
+            notes        TEXT,
+            UNIQUE(year, month)
         )
     """)
     for d in transaction_dates:
@@ -352,3 +377,94 @@ def test_burn_and_runway_negative_balance_no_crash():
     conn.close()
 
     assert isinstance(result, str)
+
+
+# ── _baseline_months: primary is_complete path (not heuristic fallback) ───────
+
+def test_baseline_months_uses_is_complete_primary_path():
+    """
+    When spending_periods has rows with is_complete=1, _baseline_months should
+    return those period_labels — NOT fall back to the heuristic.
+    This specifically validates that period_label (not the integer month column)
+    is used for both the SELECT and the WHERE clause.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY, date TEXT, description TEXT, amount REAL,
+            type TEXT, account TEXT, category TEXT, subcategory TEXT,
+            confirmed INTEGER DEFAULT 0, is_one_time INTEGER DEFAULT 0,
+            source_file TEXT, hash TEXT, notes TEXT, created_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE spending_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_label TEXT NOT NULL UNIQUE,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            is_complete INTEGER DEFAULT 0,
+            notes TEXT,
+            UNIQUE(year, month)
+        )
+    """)
+    # Insert two complete months and one incomplete
+    conn.executemany(
+        "INSERT INTO spending_periods (period_label, year, month, is_complete) VALUES (?,?,?,?)",
+        [("2025-12", 2025, 12, 1), ("2026-01", 2026, 1, 1), ("2026-02", 2026, 2, 0)],
+    )
+    conn.commit()
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-12"
+    try:
+        months = _baseline_months(conn, limit=3)
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+    # Primary path: both complete months returned, incomplete excluded
+    assert "2025-12" in months
+    assert "2026-01" in months
+    assert "2026-02" not in months
+
+
+def test_baseline_months_is_complete_respects_burn_rate_start():
+    """period_labels before BURN_RATE_START are excluded even if is_complete=1."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY, date TEXT, description TEXT, amount REAL,
+            type TEXT, account TEXT, category TEXT, confirmed INTEGER DEFAULT 0,
+            is_one_time INTEGER DEFAULT 0, source_file TEXT, hash TEXT,
+            notes TEXT, created_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE spending_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_label TEXT NOT NULL UNIQUE,
+            year INTEGER NOT NULL, month INTEGER NOT NULL,
+            is_complete INTEGER DEFAULT 0, notes TEXT, UNIQUE(year, month)
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO spending_periods (period_label, year, month, is_complete) VALUES (?,?,?,?)",
+        [("2025-10", 2025, 10, 1), ("2025-12", 2025, 12, 1)],
+    )
+    conn.commit()
+
+    import config
+    original = config.BURN_RATE_START
+    config.BURN_RATE_START = "2025-12"
+    try:
+        months = _baseline_months(conn, limit=3)
+    finally:
+        config.BURN_RATE_START = original
+    conn.close()
+
+    assert "2025-10" not in months   # before BURN_RATE_START
+    assert "2025-12" in months

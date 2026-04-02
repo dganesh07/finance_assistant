@@ -25,6 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi.testclient import TestClient
+from db.init_db import MIGRATIONS
 
 
 # ── Temp-DB fixture ────────────────────────────────────────────────────────────
@@ -48,15 +49,7 @@ def client(tmp_path, monkeypatch):
     # Bootstrap temp DB from the real schema.sql + additive migrations
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA_FILE.read_text())
-    migrations = [
-        "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
-        "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
-        "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
-        "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
-        "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
-        "ALTER TABLE spending_periods ADD COLUMN is_complete INTEGER DEFAULT 0",
-    ]
-    for sql in migrations:
+    for sql in MIGRATIONS:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
@@ -590,14 +583,7 @@ class TestSummaryRunwayFix:
         from config import SCHEMA_FILE
         conn = sqlite3.connect(db_path)
         conn.executescript(SCHEMA_FILE.read_text())
-        migrations = [
-            "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
-            "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
-            "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
-            "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
-            "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
-        ]
-        for sql in migrations:
+        for sql in MIGRATIONS:
             try:
                 conn.execute(sql)
             except sqlite3.OperationalError:

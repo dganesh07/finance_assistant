@@ -96,11 +96,13 @@ export default function Review({ onConfirm }) {
   const [localSubs,          setLocalSubs]          = useState({}) // id → chosen subcategory (pending save)
   const [saveAsRule,         setSaveAsRule]          = useState({}) // id → bool (save as correction rule)
   const [loading,            setLoading]            = useState(true)
+  const [loadError,          setLoadError]          = useState(null)
+  const [rowError,           setRowError]           = useState(null) // inline action errors (confirm, toggle, etc.)
   const [jobStatus,          setJobStatus]          = useState(null) // null | 'running' | 'done' | 'error'
   const [jobResult,          setJobResult]          = useState(null)
   const [parseStatus,        setParseStatus]        = useState(null) // null | 'running' | 'done' | 'error'
   const [parseResult,        setParseResult]        = useState(null)
-  const [corrStatus,         setCorrStatus]         = useState(null) // null | 'running' | 'done'
+  const [corrStatus,         setCorrStatus]         = useState(null) // null | 'running' | 'done' | 'error'
   const [corrResult,         setCorrResult]         = useState(null)
   const [lastImportFiles,    setLastImportFiles]    = useState([]) // source_files from last import
   const [confirmedLocalCats, setConfirmedLocalCats] = useState({}) // id → category for confirmed tab edits
@@ -131,6 +133,7 @@ export default function Review({ onConfirm }) {
       })
     }
 
+    setLoadError(null)
     Promise.all([txnPromise, api.getCategories(), api.getSubcategories()])
       .then(([txns, cats, subMap]) => {
         setTransactions(txns)
@@ -141,6 +144,7 @@ export default function Review({ onConfirm }) {
         if (tab === 'confirmed') setConfirmedLocalCats(seed)
         else setLocalCats(seed)
       })
+      .catch(e => setLoadError(e.message ?? 'Failed to load transactions'))
       .finally(() => setLoading(false))
   }, [tab, lastImportFiles])
 
@@ -161,34 +165,43 @@ export default function Review({ onConfirm }) {
     const effectiveSub  = (localSubs[txn.id] ?? txn.subcategory) || null
     const effectiveNote = localNotes[txn.id] ?? txn.notes ?? null
 
-    // Save as permanent correction rule if toggled (works for AI guesses too)
-    if (saveAsRule[txn.id]) {
-      await api.addCorrection(txn.description, effectiveCat, effectiveSub)
+    setRowError(null)
+    try {
+      // Save as permanent correction rule if toggled (works for AI guesses too)
+      if (saveAsRule[txn.id]) {
+        await api.addCorrection(txn.description, effectiveCat, effectiveSub)
+      }
+      await api.updateTransaction(txn.id, {
+        category:    effectiveCat,
+        subcategory: effectiveSub,
+        notes:       effectiveNote || null,
+        confirmed:   1,
+      })
+      setTransactions(prev => prev.filter(t => t.id !== txn.id))
+      onConfirm?.()
+    } catch (e) {
+      setRowError(`Failed to confirm: ${e.message}`)
     }
-
-    await api.updateTransaction(txn.id, {
-      category:    effectiveCat,
-      subcategory: effectiveSub,
-      notes:       effectiveNote || null,
-      confirmed:   1,
-    })
-    setTransactions(prev => prev.filter(t => t.id !== txn.id))
-    onConfirm?.()
   }
 
   // ── Confirm all visible rows ────────────────────────────────────────────────
   const confirmAll = async () => {
-    // First apply any local category changes, then bulk-confirm
-    await Promise.all(
-      transactions.map(t =>
-        localCats[t.id] && localCats[t.id] !== t.category
-          ? api.updateTransaction(t.id, { category: localCats[t.id] })
-          : Promise.resolve()
+    setRowError(null)
+    try {
+      // First apply any local category changes, then bulk-confirm
+      await Promise.all(
+        transactions.map(t =>
+          localCats[t.id] && localCats[t.id] !== t.category
+            ? api.updateTransaction(t.id, { category: localCats[t.id] })
+            : Promise.resolve()
+        )
       )
-    )
-    await api.confirmAll(transactions.map(t => t.id))
-    setTransactions([])
-    onConfirm?.()
+      await api.confirmAll(transactions.map(t => t.id))
+      setTransactions([])
+      onConfirm?.()
+    } catch (e) {
+      setRowError(`Failed to confirm all: ${e.message}`)
+    }
   }
 
   // ── Import statements (parse files in data/statements/) ────────────────────
@@ -213,18 +226,31 @@ export default function Review({ onConfirm }) {
   const applyCorrections = async () => {
     setCorrStatus('running')
     setCorrResult(null)
-    const result = await api.applyCorrections()
-    setCorrResult(result)
-    setCorrStatus('done')
-    load()
-    onConfirm?.()
+    try {
+      const result = await api.applyCorrections()
+      setCorrResult(result)
+      setCorrStatus('done')
+      load()
+      onConfirm?.()
+    } catch (e) {
+      setCorrStatus('error')
+      setCorrResult({ error: e.message })
+    }
   }
 
   // ── Run AI categorizer (slow, Ollama) ───────────────────────────────────────
   const runCategorizer = async () => {
     setJobStatus('running')
     setJobResult(null)
-    const { job_id } = await api.runCategorizer()
+    let job_id
+    try {
+      const res = await api.runCategorizer()
+      job_id = res.job_id
+    } catch (e) {
+      setJobStatus('error')
+      setJobResult({ error: e.message })
+      return
+    }
 
     // Poll every 1.5s — give up after 10 minutes (400 polls) so the UI never
     // spins forever if Ollama hangs or the server restarts mid-job.
@@ -240,7 +266,15 @@ export default function Review({ onConfirm }) {
         return
       }
 
-      const job = await api.getJob(job_id)
+      let job
+      try {
+        job = await api.getJob(job_id)
+      } catch (e) {
+        clearInterval(poll)
+        setJobStatus('error')
+        setJobResult({ error: `Poll failed: ${e.message}` })
+        return
+      }
       if (job.status === 'done') {
         clearInterval(poll)
         setJobStatus('done')
@@ -257,18 +291,28 @@ export default function Review({ onConfirm }) {
   // ── Save an override on an auto-confirmed row ───────────────────────────────
   const saveConfirmedEdit = async (txn) => {
     const newCat = confirmedLocalCats[txn.id]
-    await api.updateTransaction(txn.id, { category: newCat, confirmed: 1 })
-    setTransactions(prev => prev.map(t => t.id === txn.id ? { ...t, category: newCat } : t))
-    setConfirmedLocalCats(p => ({ ...p, [txn.id]: newCat }))
+    setRowError(null)
+    try {
+      await api.updateTransaction(txn.id, { category: newCat, confirmed: 1 })
+      setTransactions(prev => prev.map(t => t.id === txn.id ? { ...t, category: newCat } : t))
+      setConfirmedLocalCats(p => ({ ...p, [txn.id]: newCat }))
+    } catch (e) {
+      setRowError(`Failed to save: ${e.message}`)
+    }
   }
 
   // ── One-time toggle ─────────────────────────────────────────────────────────
   const toggleOneTime = async (txn) => {
     const next = txn.is_one_time ? 0 : 1
-    await api.updateTransaction(txn.id, { is_one_time: next })
-    setTransactions(prev => prev.map(t =>
-      t.id === txn.id ? { ...t, is_one_time: next } : t
-    ))
+    setRowError(null)
+    try {
+      await api.updateTransaction(txn.id, { is_one_time: next })
+      setTransactions(prev => prev.map(t =>
+        t.id === txn.id ? { ...t, is_one_time: next } : t
+      ))
+    } catch (e) {
+      setRowError(`Failed to update: ${e.message}`)
+    }
   }
 
   const pending = transactions.filter(t => !t.confirmed)
@@ -452,6 +496,11 @@ export default function Review({ onConfirm }) {
           }
         </div>
       )}
+      {corrStatus === 'error' && (
+        <div className={styles.banner} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+          Apply rules error: {corrResult?.error ?? 'unknown'}
+        </div>
+      )}
 
       {/* ── AI job status banner ── */}
       {jobStatus === 'running' && (
@@ -476,6 +525,18 @@ export default function Review({ onConfirm }) {
       {jobStatus === 'error' && (
         <div className={styles.banner} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
           AI error: {jobResult?.error ?? 'unknown'}. Is Ollama running?
+        </div>
+      )}
+
+      {/* ── Load / row-action error banners ── */}
+      {loadError && (
+        <div className={styles.banner} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+          Failed to load: {loadError}
+        </div>
+      )}
+      {rowError && (
+        <div className={styles.banner} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+          {rowError}
         </div>
       )}
 
@@ -515,6 +576,8 @@ export default function Review({ onConfirm }) {
         />
       ) : loading ? (
         <div className={styles.empty}>Loading…</div>
+      ) : loadError ? (
+        <div className={styles.empty}>Failed to load — check API connection.</div>
       ) : transactions.length === 0 ? (
         <div className={styles.empty}>
           ✓ Nothing to review — run the categorizer or import a statement.

@@ -424,13 +424,16 @@ function OneTimeSection({ months }) {
 export default function Monthly() {
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState(null)
   const [limit,   setLimit]   = useState(4)
   const [drawer,  setDrawer]  = useState(null) // { category, month } or null
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     api.getMonthly(limit)
       .then(setData)
+      .catch(e => setError(e.message ?? 'Failed to load monthly data'))
       .finally(() => setLoading(false))
   }, [limit])
 
@@ -454,6 +457,8 @@ export default function Monthly() {
 
       {loading ? (
         <div className={styles.empty}>Loading…</div>
+      ) : error ? (
+        <div className={styles.empty}>Error: {error}</div>
       ) : months.length === 0 ? (
         <div className={styles.empty}>No transactions imported yet.</div>
       ) : (

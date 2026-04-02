@@ -353,20 +353,24 @@ export default function Dashboard() {
   const [data,       setData]       = useState(null)
   const [month,      setMonth]      = useState(null)   // null = let API choose
   const [fetching,   setFetching]   = useState(true)   // true only on first load
+  const [fetchError, setFetchError] = useState(null)
 
   useEffect(() => {
     setFetching(true)
+    setFetchError(null)
     api.getDashboard(month)
       .then(d => {
         setData(d)
         // lock to the month the API returned (important on first load)
         if (!month && d.month) setMonth(d.month)
       })
+      .catch(e => setFetchError(e.message ?? 'Failed to load dashboard'))
       .finally(() => setFetching(false))
   }, [month])
 
   // First load: nothing to show yet
   if (!data && fetching) return <div className={styles.loading}>Loading…</div>
+  if (fetchError) return <div className={styles.loading}>Error: {fetchError}</div>
   if (!data?.month) return <div className={styles.loading}>No transaction data found.</div>
 
   const { spent, income, net, runway_months, prev, txn_count } = data

@@ -31,11 +31,16 @@ export default function Transactions() {
   const [editing,     setEditing]     = useState(null)
   // Note-only edit state: { id, value }
   const [noteEditing, setNoteEditing] = useState(null)
+  // Inline action feedback
+  const [saving,      setSaving]      = useState(false)  // true while a PATCH is in flight
+  const [saveError,   setSaveError]   = useState(null)
+  const [loadError,   setLoadError]   = useState(null)
 
   useEffect(() => { setPage(0) }, [search, category, dateFrom, dateTo, monthPick])
 
   const load = useCallback(() => {
     setLoading(true)
+    setLoadError(null)
     let from = dateFrom, to = dateTo
     if (monthPick) {
       const [y, m] = monthPick.split('-').map(Number)
@@ -45,6 +50,7 @@ export default function Transactions() {
     api.getTransactions({ search, category, date_from: from, date_to: to,
                           limit: PAGE_SIZE, offset: page * PAGE_SIZE })
       .then(setData)
+      .catch(e => setLoadError(e.message ?? 'Failed to load transactions'))
       .finally(() => setLoading(false))
   }, [search, category, dateFrom, dateTo, monthPick, page])
 
@@ -65,15 +71,23 @@ export default function Transactions() {
     const subAllowed = subcategoryMap[editing.category] ?? []
     const sub = subAllowed.length > 0 ? (editing.subcategory || null) : null
     const notes = editing.notes.trim() || null
-    await api.updateTransaction(id, { category: editing.category, subcategory: sub, notes })
-    // Patch local state directly — avoids re-fetch which resets scroll position
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === id ? { ...t, category: editing.category, subcategory: sub, notes } : t
-      ),
-    }))
-    setEditing(null)
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await api.updateTransaction(id, { category: editing.category, subcategory: sub, notes })
+      // Patch local state directly — avoids re-fetch which resets scroll position
+      setData(prev => ({
+        ...prev,
+        transactions: prev.transactions.map(t =>
+          t.id === id ? { ...t, category: editing.category, subcategory: sub, notes } : t
+        ),
+      }))
+      setEditing(null)
+    } catch (e) {
+      setSaveError(e.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
   }
 
   // ── Note-only edit ──────────────────────────────────────────────────────────
@@ -83,20 +97,34 @@ export default function Transactions() {
   const saveNote = async () => {
     if (!noteEditing) return
     const notes = noteEditing.value.trim() || null
-    await api.updateTransaction(noteEditing.id, { notes })
-    setData(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t =>
-        t.id === noteEditing.id ? { ...t, notes } : t
-      ),
-    }))
-    setNoteEditing(null)
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await api.updateTransaction(noteEditing.id, { notes })
+      setData(prev => ({
+        ...prev,
+        transactions: prev.transactions.map(t =>
+          t.id === noteEditing.id ? { ...t, notes } : t
+        ),
+      }))
+      setNoteEditing(null)
+    } catch (e) {
+      setSaveError(e.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
   }
 
   // ── One-time toggle ─────────────────────────────────────────────────────────
   const toggleOneTime = async (txn) => {
     const next = txn.is_one_time ? 0 : 1
-    await api.updateTransaction(txn.id, { is_one_time: next })
+    setSaveError(null)
+    try {
+      await api.updateTransaction(txn.id, { is_one_time: next })
+    } catch (e) {
+      setSaveError(e.message ?? 'Update failed')
+      return
+    }
     setData(prev => ({
       ...prev,
       transactions: prev.transactions.map(t =>
@@ -150,6 +178,10 @@ export default function Transactions() {
           Clear
         </button>
       </div>
+
+      {/* ── Error / saving feedback ── */}
+      {loadError && <div className={styles.empty} style={{ color: 'var(--red)' }}>Error: {loadError}</div>}
+      {saveError && <div className={styles.empty} style={{ color: 'var(--red)', marginBottom: 0 }}>Save failed: {saveError}</div>}
 
       {/* ── Table ── */}
       {loading ? (
@@ -268,7 +300,9 @@ export default function Transactions() {
                     {/* ── Confirmed / Save ── */}
                     <td className={styles.center}>
                       {isEditing ? (
-                        <button className={styles.saveBtn} onClick={() => saveEdit(txn.id)} title="Save">✓</button>
+                        <button className={styles.saveBtn} onClick={() => saveEdit(txn.id)} disabled={saving} title="Save">
+                          {saving ? '…' : '✓'}
+                        </button>
                       ) : txn.confirmed ? (
                         <span style={{ color: 'var(--green)' }}>✓</span>
                       ) : (

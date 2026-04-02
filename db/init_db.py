@@ -19,6 +19,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import DB_PATH, SCHEMA_FILE
 
 
+# Additive column migrations — shared with tests so both always stay in sync.
+# Each ALTER TABLE is idempotent: SQLite raises OperationalError if the column
+# already exists, which callers safely ignore.
+MIGRATIONS = [
+    "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
+    "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
+    "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
+    "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
+    "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
+    "ALTER TABLE spending_periods ADD COLUMN is_complete INTEGER DEFAULT 0",
+]
+
+
 def initialize_db() -> None:
     """
     Create finance.db and apply schema.sql if not already done.
@@ -34,19 +47,8 @@ def initialize_db() -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(schema)
 
-    # ── Additive migrations ────────────────────────────────────────────────
-    # Each ALTER TABLE is wrapped in a try/except: SQLite raises OperationalError
-    # if the column already exists, which we safely ignore.
     # ── Additive column migrations ───────────────────────────────────────
-    add_columns = [
-        "ALTER TABLE transactions ADD COLUMN account TEXT DEFAULT 'unknown'",
-        "ALTER TABLE transactions ADD COLUMN is_one_time INTEGER DEFAULT 0",
-        "ALTER TABLE account_balances ADD COLUMN statement_start TEXT",
-        "ALTER TABLE account_balances ADD COLUMN statement_end TEXT",
-        "ALTER TABLE account_balances ADD COLUMN covers_month INTEGER DEFAULT 0",
-        "ALTER TABLE spending_periods ADD COLUMN is_complete INTEGER DEFAULT 0",
-    ]
-    for sql in add_columns:
+    for sql in MIGRATIONS:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:

@@ -81,8 +81,8 @@ CREATE TABLE IF NOT EXISTS account_balances (
 );
 
 -- spending_periods: one row per calendar month.
--- is_baseline = 0 → exclude from burn rate / average calculations (e.g. setup period).
--- Pre-populated by init_db for known setup months; auto-extended by parser as new statements arrive.
+-- is_complete = 1 when all account statements cover the full calendar month (set by upsert_spending_periods).
+-- Burn rate cutoff is handled by config.BURN_RATE_START, not a per-row flag.
 CREATE TABLE IF NOT EXISTS spending_periods (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     period_label TEXT    NOT NULL UNIQUE,      -- 'YYYY-MM', e.g. '2026-01'

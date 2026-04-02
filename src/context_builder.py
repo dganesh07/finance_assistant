@@ -145,16 +145,16 @@ def _baseline_months(conn: sqlite3.Connection, limit: int = 3) -> list[str]:
     (e.g. first import, or spending_periods table is empty).
     """
     rows = conn.execute("""
-        SELECT month
+        SELECT period_label
         FROM spending_periods
         WHERE is_complete = 1
-          AND month >= ?
-        ORDER BY month DESC
+          AND period_label >= ?
+        ORDER BY period_label DESC
         LIMIT ?
     """, (config.BURN_RATE_START, limit)).fetchall()
 
     if rows:
-        return [r["month"] for r in rows]
+        return [r["period_label"] for r in rows]
 
     # Fallback: heuristic (month ended at least 5 weeks ago means the next statement
     # covering it has likely been imported).
