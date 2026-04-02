@@ -60,14 +60,14 @@ _TD_DATE_RE = re.compile(
 )
 
 
-def _normalise_td_date(raw: str) -> Optional[str]:
+def _normalise_td_date(raw: str, stmt_start: Optional[str] = None) -> Optional[str]:
     """
     Parse TD PDF transaction date 'FEB02' or 'FEB 27' → 'YYYY-MM-DD'.
-    Year is inferred: future date → roll back one year.
+    Year is anchored to stmt_start when provided; otherwise inferred from today.
     """
     raw = raw.strip()
     raw = re.sub(r"([A-Za-z]{3})(\d{1,2})", r"\1 \2", raw)  # "FEB02" → "FEB 02"
-    return normalise_date(raw)
+    return normalise_date(raw, stmt_start=stmt_start)
 
 
 # Chequing header dates: "JAN30/26", "FEB 27/26"
@@ -366,7 +366,7 @@ def _is_td_transaction_table(header_row: list[str]) -> bool:
     )
 
 
-def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
+def _parse_td_table(table: list[list], stmt_start: Optional[str] = None) -> tuple[list[dict], int]:
     """
     Parse a TD chequing/savings transaction table extracted by pdfplumber.
 
@@ -468,7 +468,7 @@ def _parse_td_table(table: list[list]) -> tuple[list[dict], int]:
             if not raw_d:
                 continue
 
-            date = _normalise_td_date(raw_d)
+            date = _normalise_td_date(raw_d, stmt_start=stmt_start)
             if not date:
                 continue
 
@@ -556,7 +556,7 @@ _DATE_RE = re.compile(
 )
 
 
-def _extract_from_text(text: str) -> list[dict]:
+def _extract_from_text(text: str, stmt_start: Optional[str] = None) -> list[dict]:
     """Fallback: scan raw page text for date + amount patterns."""
     results = []
     for line in text.splitlines():
@@ -567,7 +567,7 @@ def _extract_from_text(text: str) -> list[dict]:
         amount_m = _AMOUNT_RE.search(line)
         if not date_m or not amount_m:
             continue
-        date = normalise_date(date_m.group())
+        date = normalise_date(date_m.group(), stmt_start=stmt_start)
         if not date:
             continue
         start       = date_m.end()
@@ -644,7 +644,7 @@ def _is_td_visa_text(text: str) -> bool:
     return bool(_TD_VISA_TXN_RE.search(text))
 
 
-def _parse_td_visa_text(text: str) -> tuple[list[dict], int]:
+def _parse_td_visa_text(text: str, stmt_start: Optional[str] = None) -> tuple[list[dict], int]:
     """
     Parse TD Visa CC statement raw text (no tables).
 
@@ -676,7 +676,7 @@ def _parse_td_visa_text(text: str) -> tuple[list[dict], int]:
         description  = m.group(2).strip()
         raw_amount   = m.group(3)
 
-        date = _normalise_td_date(raw_date_str)
+        date = _normalise_td_date(raw_date_str, stmt_start=stmt_start)
         if not date:
             continue
 
@@ -720,9 +720,12 @@ def _extract_text_spaced(page) -> str:
     return page.extract_text(x_tolerance=1, y_tolerance=5) or ""
 
 
-def parse_pdf(file_path: Path) -> tuple[list[dict], int]:
+def parse_pdf(file_path: Path, stmt_start: Optional[str] = None) -> tuple[list[dict], int]:
     """
     Extract transactions from a TD PDF statement using pdfplumber.
+
+    stmt_start: YYYY-MM-DD statement period start — passed to date normalisation
+      so year-less transaction dates (e.g. "FEB 27") are anchored correctly.
 
     Strategy (per page):
       1. If pdfplumber finds tables → check each for TD transaction table format
@@ -749,7 +752,7 @@ def parse_pdf(file_path: Path) -> tuple[list[dict], int]:
                             continue
                         header = [str(c or "").strip() for c in table[0]]
                         if _is_td_transaction_table(header):
-                            rows, d = _parse_td_table(table)
+                            rows, d = _parse_td_table(table, stmt_start=stmt_start)
                             transactions.extend(rows)
                             total_dropped += d
                             found_td_txn_table = True
@@ -758,11 +761,11 @@ def parse_pdf(file_path: Path) -> tuple[list[dict], int]:
                     default_text = page.extract_text() or ""
                     if _is_td_visa_text(default_text):
                         spaced_text = _extract_text_spaced(page)
-                        rows, d = _parse_td_visa_text(spaced_text)
+                        rows, d = _parse_td_visa_text(spaced_text, stmt_start=stmt_start)
                         transactions.extend(rows)
                         total_dropped += d
                     elif not tables:
-                        transactions.extend(_extract_from_text(default_text))
+                        transactions.extend(_extract_from_text(default_text, stmt_start=stmt_start))
 
     except Exception as e:
         console.print(f"[red]  PDF parse error for {file_path.name}: {e}[/red]")

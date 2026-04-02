@@ -213,3 +213,46 @@ class TestParseCsvEdgeCases:
         assert len(credits) == 1
         assert debits[0]["amount"]  == pytest.approx(55.50, rel=0.01)
         assert credits[0]["amount"] == pytest.approx(2000.0, rel=0.01)
+
+
+# ── normalise_date: stmt_start year anchoring ─────────────────────────────────
+
+class TestNormaliseDateStmtStart:
+    def test_dec_stmt_imported_late_no_future_rollback_needed(self):
+        # Dec 2024 statement imported in Dec 2025: "DEC 27" → 2024-12-27, not 2025-12-27
+        result = normalise_date("DEC 27", stmt_start="2024-12-01")
+        assert result == "2024-12-27"
+
+    def test_dec_stmt_date_in_same_year_as_stmt_start(self):
+        # Normal case: stmt starts Dec 2025, date "DEC 15" → 2025-12-15
+        result = normalise_date("DEC 15", stmt_start="2025-12-01")
+        assert result == "2025-12-15"
+
+    def test_cross_year_cc_jan_date_rolls_to_next_year(self):
+        # CC period Dec 30 2025 – Jan 27 2026: "JAN 15" should → 2026-01-15
+        # stmt_year=2025; candidate Jan 15 2025 is 348 days before Dec 30 2025 → year+1
+        result = normalise_date("JAN 15", stmt_start="2025-12-30")
+        assert result == "2026-01-15"
+
+    def test_cross_year_cc_dec_date_stays_in_stmt_year(self):
+        # Same CC period: "DEC 31" → 2025-12-31 (3 days before stmt start, not >60)
+        result = normalise_date("DEC 31", stmt_start="2025-12-30")
+        assert result == "2025-12-31"
+
+    def test_no_stmt_start_falls_back_to_heuristic(self):
+        # Without stmt_start, future dates roll back one year (original behaviour)
+        from datetime import date
+        today = date.today()
+        # A month/day already passed this year should not be rolled back
+        result = normalise_date("01/01")
+        assert result is not None and result.endswith("-01-01")
+
+    def test_with_full_year_in_raw_stmt_start_is_ignored(self):
+        # When raw has an explicit year, stmt_start has no effect
+        result = normalise_date("2024-06-15", stmt_start="2026-01-01")
+        assert result == "2024-06-15"
+
+    def test_feb27_td_format_with_stmt_start(self):
+        # TD PDF date "FEB 27" in a Jan 30 – Feb 27 2026 statement
+        result = normalise_date("FEB 27", stmt_start="2026-01-30")
+        assert result == "2026-02-27"

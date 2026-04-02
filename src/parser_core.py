@@ -44,13 +44,18 @@ log = logging.getLogger(__name__)
 
 # ── Date normalisation ─────────────────────────────────────────────────────────
 
-def normalise_date(raw: str) -> Optional[str]:
+def normalise_date(raw: str, stmt_start: Optional[str] = None) -> Optional[str]:
     """
     Parse any bank date string into ISO YYYY-MM-DD.
 
     Handles formats like:
       • "Mar 15, 2024"   • "03/15/2024"  • "2024-03-15"
-      • "15-Mar-24"      • "03/15"  (no year — inferred from today)
+      • "15-Mar-24"      • "03/15"  (no year — inferred from stmt_start or today)
+
+    stmt_start: YYYY-MM-DD start of the statement period.  When provided,
+      year-less dates (e.g. "FEB 27" from a TD PDF) are anchored to the
+      statement year rather than the current year, which correctly handles
+      Dec statements imported months later.
 
     Returns None if the string cannot be parsed.
     """
@@ -70,11 +75,28 @@ def normalise_date(raw: str) -> Optional[str]:
             return None
 
     # If the raw string contained no year, dateutil defaults to current year.
-    # Guard: if that gives a future date, roll back one year (handles Dec statements
-    # imported in January).
+    # Anchor year to the statement period when available; otherwise fall back
+    # to the old heuristic (future date → roll back one year).
     no_year = not re.search(r"\b(19|20)\d{2}\b", raw) and len(re.findall(r"\d+", raw)) <= 2
-    if no_year and dt.date() > today:
-        dt = dt.replace(year=dt.year - 1)
+    if no_year:
+        if stmt_start:
+            stmt_year = int(stmt_start[:4])
+            try:
+                candidate = dt.replace(year=stmt_year)
+            except ValueError:
+                # Feb 29 doesn't exist in stmt_year (non-leap) — use Feb 28
+                candidate = dt.replace(year=stmt_year, day=28)
+            start_date = date.fromisoformat(stmt_start)
+            # If candidate falls more than 60 days before statement start,
+            # it belongs to the next year (e.g. JAN date in a Dec→Jan CC statement)
+            if (start_date.toordinal() - candidate.date().toordinal()) > 60:
+                try:
+                    candidate = dt.replace(year=stmt_year + 1)
+                except ValueError:
+                    candidate = dt.replace(year=stmt_year + 1, day=28)
+            dt = candidate
+        elif dt.date() > today:
+            dt = dt.replace(year=dt.year - 1)
 
     return dt.strftime("%Y-%m-%d")
 
@@ -461,8 +483,8 @@ def parse_new_statements(
             rows          = parse_csv(file_path)
             parse_dropped = 0
         elif suffix == ".pdf":
-            rows, parse_dropped = parse_pdf(file_path)
             stmt_start, stmt_end = extract_statement_dates(file_path, account)
+            rows, parse_dropped = parse_pdf(file_path, stmt_start=stmt_start)
             if stmt_start and stmt_end:
                 console.print(f"  [dim]Statement period:[/dim] {stmt_start} → {stmt_end}")
             else:
