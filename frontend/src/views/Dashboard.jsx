@@ -2,32 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { api } from '../api.js'
 import styles from './Dashboard.module.css'
-
-// ── Constants ───────────────────────────────────────────────────────────────────
-
-const CAT_COLORS = {
-  food:          '#f59e0b',
-  groceries:     '#4ade80',
-  transport:     '#60a5fa',
-  subscriptions: '#c084fc',
-  shopping:      '#f87171',
-  health:        '#34d399',
-  utilities:     '#fb923c',
-  rent:          '#e879f9',
-  entertainment: '#a78bfa',
-  self_care:     '#f472b6',
-  travel:        '#38bdf8',
-  cannabis:      '#86efac',
-  investment:    '#6ee7b7',
-  atm:           '#fbbf24',
-  fees:          '#94a3b8',
-  income:        '#4ade80',
-  insurance:     '#fca5a5',
-  hobbies:       '#818cf8',
-  other:         '#475569',
-}
-
-const catColor = c => CAT_COLORS[c] ?? '#60a5fa'
+import { catColor } from '../categoryColors.js'
 
 const fmt  = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 0 })}`
 const fmtd = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
@@ -59,9 +34,9 @@ function AccountBadges({ accounts }) {
             fontFamily: 'var(--font-mono)',
             padding: '1px 6px',
             borderRadius: 3,
-            background: a.covers_month ? '#1a3a1a' : '#2a2010',
-            color:      a.covers_month ? '#4ade80'  : '#f59e0b',
-            border:    `1px solid ${a.covers_month ? '#4ade8033' : '#f59e0b33'}`,
+            background: a.covers_month ? 'var(--green-dim)' : 'var(--amber-dim)',
+            color:      a.covers_month ? 'var(--green)'     : 'var(--amber)',
+            border:    `1px solid ${a.covers_month ? 'var(--green-dim)' : 'var(--amber-dim)'}`,
             cursor: 'default',
           }}
         >

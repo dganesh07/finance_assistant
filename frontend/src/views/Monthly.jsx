@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { api } from '../api.js'
 import styles from './Monthly.module.css'
+import { catColor } from '../categoryColors.js'
 
 const fmt = n => `$${Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2 })}`
 
@@ -50,9 +51,9 @@ function AccountBadges({ accounts }) {
             fontFamily: 'var(--font-mono)',
             padding: '1px 5px',
             borderRadius: 3,
-            background: a.covers_month ? '#1a3a1a' : '#2a2010',
-            color:      a.covers_month ? '#4ade80'  : '#f59e0b',
-            border:    `1px solid ${a.covers_month ? '#4ade8033' : '#f59e0b33'}`,
+            background: a.covers_month ? 'var(--green-dim)' : 'var(--amber-dim)',
+            color:      a.covers_month ? 'var(--green)'     : 'var(--amber)',
+            border:    `1px solid ${a.covers_month ? 'var(--green-dim)' : 'var(--amber-dim)'}`,
           }}
         >
           {acctShort(a.account)} {a.covers_month ? '✓' : '~'}
@@ -249,26 +250,17 @@ function CategoryTable({ months, onCategoryClick }) {
 
 // ── Subcategory drill-down drawer ───────────────────────────────────────────────
 
-const CAT_COLORS = {
-  food: '#f59e0b', groceries: '#4ade80', transport: '#60a5fa',
-  subscriptions: '#c084fc', shopping: '#f87171', health: '#34d399',
-  utilities: '#fb923c', rent: '#e879f9', entertainment: '#a78bfa',
-  self_care: '#f472b6', travel: '#38bdf8', cannabis: '#86efac',
-  investment: '#6ee7b7', atm: '#fbbf24', fees: '#94a3b8',
-  income: '#4ade80', transfer: '#64748b', other: '#475569',
-}
-const catColor = c => CAT_COLORS[c] ?? '#60a5fa'
 
 function SubcatTooltip({ active, payload }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
   return (
     <div style={{
-      background: '#1a1a1a', border: '1px solid #333', borderRadius: 6,
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
       padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12,
     }}>
-      <div style={{ color: '#e2e8f0' }}>{d.subcategory ?? '(uncategorised)'}</div>
-      <div style={{ color: '#94a3b8' }}>${d.total.toFixed(2)} · {d.count} txns</div>
+      <div style={{ color: 'var(--text)' }}>{d.subcategory ?? '(uncategorised)'}</div>
+      <div style={{ color: 'var(--subtle)' }}>${d.total.toFixed(2)} · {d.count} txns</div>
     </div>
   )
 }

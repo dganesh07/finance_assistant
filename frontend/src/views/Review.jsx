@@ -444,7 +444,7 @@ export default function Review({ onConfirm }) {
                         {w.date} — {w.description} —{' '}
                         <span style={{ color: 'var(--red)' }}>${w.amount.toLocaleString('en-CA', { minimumFractionDigits: 2 })}</span>
                       </span>
-                      <span style={{ color: 'var(--fg-muted)', marginLeft: 8 }}>{w.reason}</span>
+                      <span style={{ color: 'var(--muted)', marginLeft: 8 }}>{w.reason}</span>
                     </li>
                   ))
                 )}
