@@ -53,7 +53,7 @@ from config import (
     GOOGLE_INVESTMENT_TAB, GOOGLE_SHEET_ID,
     REPORT_BACKEND, REPORT_MODEL, STATEMENTS_DIR, SUBCATEGORIES,
 )
-from src.categorizer import categorize_transactions
+from src.categorizer import BATCH_SIZE, categorize_transactions
 from src.context_builder import build_context
 from src.parser import parse_new_statements
 from src.portfolio_connector import load_portfolio
@@ -431,9 +431,14 @@ def confirm_all(body: ConfirmAllRequest):
 def _run_categorizer_job(job_id: str) -> None:
     """
     Background task — fetches all unknown/unconfirmed transactions,
-    sends them to the Ollama categorizer, writes results back to DB.
+    sends them to the Ollama categorizer in batches, writes results back to DB.
+
+    Progress is committed and saved to disk after every batch so that:
+    - The UI shows live X/total progress while the job is running.
+    - If the server restarts mid-job, completed batches are already in the DB
+      and re-running will only process the remaining unknowns.
     """
-    _jobs[job_id] = {"status": "running", "processed": 0, "categorized": 0}
+    _jobs[job_id] = {"status": "running", "processed": 0, "categorized": 0, "total": 0}
     _save_jobs_to_disk()
     try:
         conn = get_conn()
@@ -446,25 +451,39 @@ def _run_categorizer_job(job_id: str) -> None:
 
         txns = [dict(r) for r in rows]
         if not txns:
-            _jobs[job_id] = {"status": "done", "processed": 0, "categorized": 0}
+            _jobs[job_id] = {"status": "done", "processed": 0, "categorized": 0, "total": 0}
             _save_jobs_to_disk()
             conn.close()
             return
 
-        results     = categorize_transactions(txns)
+        total       = len(txns)
+        processed   = 0
         categorized = 0
-        for orig, result in zip(txns, results):
-            cat = result.get("category", "unknown")
-            sub = result.get("subcategory")
-            if cat and cat != "unknown":
-                conn.execute(
-                    "UPDATE transactions SET category = ?, subcategory = ? WHERE id = ?",
-                    (cat, sub, orig["id"]),
-                )
-                categorized += 1
-        conn.commit()
+        _jobs[job_id]["total"] = total
+        _save_jobs_to_disk()
+
+        for batch_start in range(0, total, BATCH_SIZE):
+            batch   = txns[batch_start : batch_start + BATCH_SIZE]
+            results = categorize_transactions(batch)
+
+            for orig, result in zip(batch, results):
+                cat = result.get("category", "unknown")
+                sub = result.get("subcategory")
+                if cat and cat != "unknown":
+                    conn.execute(
+                        "UPDATE transactions SET category = ?, subcategory = ? WHERE id = ?",
+                        (cat, sub, orig["id"]),
+                    )
+                    categorized += 1
+
+            conn.commit()
+            processed += len(batch)
+            _jobs[job_id]["processed"]   = processed
+            _jobs[job_id]["categorized"] = categorized
+            _save_jobs_to_disk()
+
         conn.close()
-        _jobs[job_id] = {"status": "done", "processed": len(txns), "categorized": categorized}
+        _jobs[job_id]["status"] = "done"
         _save_jobs_to_disk()
 
     except Exception as e:

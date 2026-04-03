@@ -284,6 +284,9 @@ export default function Review({ onConfirm }) {
         clearInterval(poll)
         setJobStatus('error')
         setJobResult(job)
+      } else {
+        // still running — update progress so banner can show X / total
+        setJobResult(job)
       }
     }, 1500)
   }
@@ -505,7 +508,9 @@ export default function Review({ onConfirm }) {
       {/* ── AI job status banner ── */}
       {jobStatus === 'running' && (
         <div className={styles.banner} style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}>
-          Ollama is categorizing… this may take a minute.
+          {jobResult?.total > 0
+            ? `Ollama is categorizing… ${jobResult.processed} / ${jobResult.total} done`
+            : 'Ollama is categorizing… this may take a minute.'}
         </div>
       )}
       {jobStatus === 'done' && jobResult && (
