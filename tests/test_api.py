@@ -49,7 +49,7 @@ def client(tmp_path, monkeypatch):
     # Bootstrap temp DB from the real schema.sql + additive migrations
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA_FILE.read_text())
-    for sql in MIGRATIONS:
+    for _, sql in MIGRATIONS:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
@@ -583,7 +583,7 @@ class TestSummaryRunwayFix:
         from config import SCHEMA_FILE
         conn = sqlite3.connect(db_path)
         conn.executescript(SCHEMA_FILE.read_text())
-        for sql in MIGRATIONS:
+        for _, sql in MIGRATIONS:
             try:
                 conn.execute(sql)
             except sqlite3.OperationalError:

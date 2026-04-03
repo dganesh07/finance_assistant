@@ -61,15 +61,11 @@ def _init_temp_db(db_path: Path) -> None:
     schema = SCHEMA_FILE.read_text()
     conn   = sqlite3.connect(db_path)
     conn.executescript(schema)
-    for sql in MIGRATIONS:
+    for _, sql in MIGRATIONS:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
             pass
-    try:
-        conn.execute("ALTER TABLE spending_periods DROP COLUMN is_baseline")
-    except sqlite3.OperationalError:
-        pass
     conn.commit()
     conn.close()
 

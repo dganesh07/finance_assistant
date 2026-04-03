@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS account_balances (
     UNIQUE(account, statement_month)           -- one balance row per account per month; re-parse updates it
 );
 
+-- schema_migrations: one row per applied migration, written by db/init_db.py.
+-- version matches the 1-based index in MIGRATIONS; applied_at is an ISO timestamp
+-- or 'legacy' when the migration was already present before tracking was introduced.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     INTEGER PRIMARY KEY,
+    description TEXT    NOT NULL,
+    applied_at  TEXT    NOT NULL
+);
+
 -- spending_periods: one row per calendar month.
 -- is_complete = 1 when all account statements cover the full calendar month (set by upsert_spending_periods).
 -- Burn rate cutoff is handled by config.BURN_RATE_START, not a per-row flag.
