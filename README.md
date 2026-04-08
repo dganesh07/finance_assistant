@@ -2,7 +2,7 @@
 
 A local personal finance tool for TD Bank account holders. Import bank statements, review AI-assigned categories, browse spending by month, and track your investment portfolio — all from a local web UI.
 
-No cloud sync, no third-party services beyond Google Sheets (optional). Everything runs on your machine.
+**Privacy-first:** no cloud sync, no third-party services beyond Google Sheets (optional, read-only). All transaction data stays on your machine. Built with [Claude](https://claude.ai) as the primary development tool.
 
 ---
 
@@ -59,7 +59,7 @@ finance-assistant/
 
 ## Setup
 
-**Requirements:** Python 3.11+, Node.js 18+, [Ollama](https://ollama.ai) (for AI categorization)
+**Requirements:** Python 3.11+, Node.js 18+, [Ollama](https://ollama.ai) (optional — for local AI categorization)
 
 ### 1. Python environment
 
@@ -89,6 +89,8 @@ cp profile.example.txt profile.txt
 Edit each file:
 - `bills.local.json` — your recurring bills (rent, subscriptions, utilities, etc.)
 - `profile.txt` — your financial context: income range, goals, stress areas, AI behavior notes
+
+> Alternatively, set `ANTHROPIC_API_KEY` in `config_local.py` to use Claude for categorization instead of Ollama (no local model needed).
 
 ### 4. Google Sheets setup (optional but recommended)
 
@@ -218,11 +220,10 @@ curl http://localhost:8000/api/context
 ### Portfolio dashboard
 
 Go to **Portfolio** (`◎`) in the sidebar to see:
-- Net worth summary (CAD total, USD total, TFSA balance + contribution room, 401K in USD)
+- Net worth summary across currencies, account types, and TFSA contribution room
 - Full account table grouped by type (TFSA / Retirement / HISA / Savings / Other) with currency badges
 - Invested vs Cash donut chart
-- TFSA holdings (VFV.TO units + cost basis, CAD)
-- US Retirement (FVTKX aggregated across employer match + ROTH + employee deferral, USD)
+- Holdings per account (units, cost basis, currency)
 - Full Investment_Transactions log (newest first)
 
 Everything is **read-only** — edit data directly in your Google Sheet and click ↺ Refresh.

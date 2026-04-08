@@ -57,6 +57,13 @@ google_credentials.json
 # Personal values like Google Sheet ID live here, not in config.py
 config_local.py
 
+# ── Internal / operational docs — keep local ──────────────────────────────────
+# These are session notes, internal status tracking, and business planning files
+# that contain no personal financial data but shouldn't be part of the public repo.
+STATUS.md
+COMMANDS.md
+docs/client-mode-roadmap.md
+
 # ── Misc ──────────────────────────────────────────────────────────────────────
 *.log
 .env
